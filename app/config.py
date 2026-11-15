@@ -15,7 +15,7 @@ Spec
     llm:            api_base / api_key / model / system_prompt
                     use_system_proxy / price_per_1m_input / price_per_1m_output
     capture:        snap_interval / interval / quality / save_dir / region_preset
-    storage:        db_path
+    storage:        db_path / archive_dir / export_dir
     report:         trigger(manual|scheduled|both) / scheduled_time
     upload:         enabled / url / token / use_system_proxy
     skill_server:   enabled / port / token
@@ -48,6 +48,8 @@ DEFAULTS: Dict[str, Any] = {
     },
     "storage": {
         "db_path": "records.db",
+        "archive_dir": "outputs/reports",  # 日报留档目录（Markdown 文件）
+        "export_dir": "exports",           # 数据导出目录
     },
     "report": {
         "trigger": "both",           # manual / scheduled / both（用户拍板：都要）
