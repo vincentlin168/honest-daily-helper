@@ -75,5 +75,45 @@ class TestDisplayDetection(unittest.TestCase):
         self.assertIn(result, (True, False))
 
 
+class TestChangeDetection(unittest.TestCase):
+    """变更检测：用假截图源驱动，不依赖真实屏幕。"""
+
+    class _FakeCapture(Capture):
+        def __init__(self, images):
+            super().__init__()
+            self._images = list(images)
+            self._idx = 0
+
+        def _grab_image(self):
+            img = self._images[self._idx % len(self._images)]
+            self._idx += 1
+            return img
+
+    def test_unchanged_screen_returns_empty(self):
+        img = make_image(color=(10, 20, 30))
+        cap = self._FakeCapture([img, img])
+        self.assertFalse(cap.grab().is_empty)          # 第一次：有画面
+        self.assertTrue(cap.grab().is_empty)           # 第二次：画面未变 → 跳过
+
+    def test_changed_screen_returns_data(self):
+        cap = self._FakeCapture([
+            make_image(color=(10, 20, 30)),
+            make_image(color=(200, 30, 40)),
+        ])
+        self.assertFalse(cap.grab().is_empty)
+        self.assertFalse(cap.grab().is_empty)          # 画面变了 → 继续识别
+
+    def test_save_to_disk_still_updates_fingerprint(self):
+        """回归：save_to_disk=True 时也必须更新指纹。
+
+        旧实现只在 save_to_disk=False 分支更新 _last_hash，
+        导致落盘路径下指纹状态陈旧，后续变更检测不可靠。
+        """
+        img = make_image(color=(10, 20, 30))
+        cap = self._FakeCapture([img, img])
+        cap.grab(save_to_disk=True)                    # 落盘，并应更新指纹
+        self.assertTrue(cap.grab(save_to_disk=False).is_empty)  # 画面未变 → 跳过
+
+
 if __name__ == "__main__":
     unittest.main()

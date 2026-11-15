@@ -34,6 +34,26 @@ def format_clock(ts: int) -> str:
     return datetime.fromtimestamp(ts).strftime("%H:%M")
 
 
+def _distribute_to_hours(start_ts: int, end_ts: int, duration: int,
+                         hourly: Dict[int, int]) -> None:
+    """把一段活动的时长按自然小时切片分摊到 hourly。
+
+    跨小时的活动（如 10:50 - 11:10）会按实际落在各小时内的秒数分摊，
+    而不是整段记入开始小时，避免「投入最集中的时段」统计偏移。
+    """
+    if duration <= 0:
+        return
+    cursor = start_ts
+    end = end_ts
+    while cursor < end:
+        hour = datetime.fromtimestamp(cursor).hour
+        # 当前小时内的下一个整点
+        hour_end = (cursor // 3600 + 1) * 3600
+        slice_end = min(end, hour_end)
+        hourly[hour] += slice_end - cursor
+        cursor = slice_end
+
+
 def aggregate_stats(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     """聚合一天的 entries 成统计。"""
     if not entries:
@@ -57,8 +77,8 @@ def aggregate_stats(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         dur = max(0, e["ended_at"] - e["started_at"])
         total_duration += dur
         category_durations[e.get("category", "其他")] += dur
-        hour = datetime.fromtimestamp(e["started_at"]).hour
-        hourly[hour] += dur
+        # 跨小时的活动按小时切片分摊，否则整段会记到开始小时，导致「集中时段」偏移
+        _distribute_to_hours(e["started_at"], e["ended_at"], dur, hourly)
 
     # 最长空档：相邻记录之间的间隔
     max_gap = 0

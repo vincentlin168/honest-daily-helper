@@ -39,6 +39,30 @@ class TestReportUploader(unittest.TestCase):
         u = ReportUploader(url="http://localhost:9/report", token="t")
         self.assertTrue(u.enabled)
 
+    # ---------- 回归：首次请求就失败时不能抛 UnboundLocalError ----------
+
+    def test_timeout_on_first_attempt_returns_error_dict(self):
+        """回归：第一次尝试就超时，response 从未赋值。
+
+        旧实现里 `getattr(response, ...)` 会因 response 未定义抛 UnboundLocalError。
+        """
+        u = ReportUploader(url="http://10.255.255.1:81/report", token="t")
+        # 缩短超时，避免测试长时间等待
+        u.REQUEST_TIMEOUT = 0.05
+        r = u.upload("x", {"a": 1})
+        self.assertFalse(r["ok"])
+        self.assertIn("error", r)
+        self.assertEqual(r["http_status"], 0)
+        self.assertGreaterEqual(r["duration_ms"], 0)
+
+    def test_connection_error_returns_error_dict(self):
+        u = ReportUploader(url="http://127.0.0.1:9/report", token="t")
+        u.REQUEST_TIMEOUT = 1.0
+        r = u.upload("x", {"a": 1})
+        self.assertFalse(r["ok"])
+        self.assertIn("error", r)
+        self.assertEqual(r["http_status"], 0)
+
 
 class TestSkillServer(unittest.TestCase):
     @classmethod
@@ -67,7 +91,10 @@ class TestSkillServer(unittest.TestCase):
 
     def _get(self, path, token=None):
         headers = {"Authorization": f"Bearer {token}"} if token else {}
-        r = httpx.get(f"http://127.0.0.1:{self.port}{path}", headers=headers, timeout=5)
+        # trust_env=False：不读取系统代理环境变量。否则开启系统代理的机器上，
+        # 本地 127.0.0.1 请求会被代理转发，导致 502 / 非 JSON 响应。
+        with httpx.Client(timeout=5, trust_env=False) as client:
+            r = client.get(f"http://127.0.0.1:{self.port}{path}", headers=headers)
         return r.status_code, r.json()
 
     def test_health_no_token(self):

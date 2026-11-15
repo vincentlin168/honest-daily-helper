@@ -167,21 +167,141 @@ class LLMClient:
         }
 
     @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        """剥离 markdown 代码块围栏（```json ... ``` 或 ``` ... ```）。
+
+        注意：不能简单用 ``^```(?:json)?\\s*`` —— 该正则在多行模式下 ``\\s*`` 会贪婪吃掉
+        换行，且当围栏内 JSON 非法时无法回退。这里改为定位围栏起止标记后精确切片。
+        """
+        s = text.strip()
+        fence = re.match(r"^```[ \t]*([A-Za-z0-9_+-]*)[ \t]*\r?\n?(.*?)\r?\n?[ \t]*```$",
+                         s, flags=re.DOTALL)
+        if fence:
+            return fence.group(2).strip()
+        # 未闭合的围栏（模型输出被截断）：剥掉开头围栏行
+        s2 = re.sub(r"^```[ \t]*[A-Za-z0-9_+-]*[ \t]*\r?\n?", "", s)
+        return s2.strip()
+
+    @staticmethod
+    def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+        """从任意文本中提取第一个合法 JSON 对象。
+
+        依次尝试：整体解析 → 括号配平扫描（不依赖正则贪婪匹配）。
+        括号配平能正确跳过字符串字面量里的 ``{`` ``}`` 与转义引号。
+        """
+        candidates = []
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                return obj
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        # 括号配平扫描：找到第一个能配平的 {...}
+        start = text.find("{")
+        while start != -1:
+            depth = 0
+            in_string = False
+            escaped = False
+            for i in range(start, len(text)):
+                ch = text[i]
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif ch == "\\":
+                        escaped = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append(text[start:i + 1])
+                        break
+            start = text.find("{", start + 1)
+
+        for cand in candidates:
+            try:
+                obj = json.loads(cand)
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                continue
+        return None
+
+    @staticmethod
+    def _repair_json(text: str) -> Optional[Dict[str, Any]]:
+        """修复 JSON 中字符串字面量里的裸换行/裸回车（模型常见错误）。
+
+        逐字符扫描并跟踪「是否在字符串内」，只把字符串内部的裸控制字符转义，
+        结构性的换行（键值之间的换行）保持原样。
+        """
+        out = []
+        in_string = False
+        escaped = False
+        changed = False
+        for ch in text:
+            if in_string:
+                if escaped:
+                    out.append(ch)
+                    escaped = False
+                    continue
+                if ch == "\\":
+                    out.append(ch)
+                    escaped = True
+                    continue
+                if ch == '"':
+                    out.append(ch)
+                    in_string = False
+                    continue
+                if ch == "\n":
+                    out.append("\\n")
+                    changed = True
+                    continue
+                if ch == "\r":
+                    out.append("\\r")
+                    changed = True
+                    continue
+                out.append(ch)
+                continue
+            # 字符串外
+            if ch == '"':
+                in_string = True
+            out.append(ch)
+
+        if not changed:
+            return None
+        try:
+            obj = json.loads("".join(out))
+            return obj if isinstance(obj, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    @staticmethod
     def parse_recognition(text: str) -> Dict[str, str]:
         """从模型输出中解析 activity + content + category（容错处理各种 JSON 形态）。"""
-        # 剥离可能的 markdown 代码块包裹
-        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
-        try:
-            obj = json.loads(cleaned)
-        except json.JSONDecodeError:
-            # 尝试从文本中提取第一个 {...}
-            m = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-            if not m:
-                return {"activity": text.strip()[:15], "content": text.strip(), "category": "其他"}
-            try:
-                obj = json.loads(m.group(0))
-            except json.JSONDecodeError:
-                return {"activity": text.strip()[:15], "content": text.strip(), "category": "其他"}
+        raw = (text or "").strip()
+        fallback = {
+            "activity": raw[:15],
+            "content": raw,
+            "category": "其他",
+        }
+        if not raw:
+            return fallback
+
+        cleaned = LLMClient._strip_code_fence(raw)
+        obj = LLMClient._extract_json_object(cleaned)
+        if obj is None:
+            obj = LLMClient._repair_json(cleaned)
+        if obj is None:
+            # 最后再试一次原文（围栏内可能还有嵌套 JSON）
+            obj = LLMClient._extract_json_object(raw)
+        if obj is None:
+            return fallback
 
         content = obj.get("content") or obj.get("描述") or ""
         category = obj.get("category") or obj.get("分类") or "其他"

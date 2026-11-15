@@ -117,6 +117,67 @@ class TestParseRecognition(unittest.TestCase):
         self.assertEqual(r["content"], "只有内容")
         self.assertEqual(r["category"], "其他")
 
+    # ---------- 回归：markdown 围栏 + 非法 JSON 的容错 ----------
+
+    def test_fenced_json_with_bare_newline_in_string(self):
+        """回归：模型在 JSON 字符串里输出未转义换行时，不能把整段原文当 content 入库。
+
+        这条曾经导致 entries 表写入 ```` ```json ```` 开头的垃圾记录。
+        """
+        text = (
+            '```json\n{\n'
+            '  "activity": "开发日报助手工具",\n'
+            '  "content": "在代码编辑器中开发日报助手项目\n第二行描述",\n'
+            '  "category": "代码开发"\n'
+            '}\n```'
+        )
+        r = LLMClient.parse_recognition(text)
+        self.assertEqual(r["activity"], "开发日报助手工具")
+        self.assertEqual(r["category"], "代码开发")
+        self.assertNotIn("```", r["content"])
+        self.assertNotIn("```", r["activity"])
+        self.assertIn("第二行描述", r["content"])
+
+    def test_fenced_json_without_language_tag(self):
+        text = '```\n{"activity": "写代码", "content": "写代码", "category": "代码开发"}\n```'
+        r = LLMClient.parse_recognition(text)
+        self.assertEqual(r["activity"], "写代码")
+        self.assertEqual(r["category"], "代码开发")
+
+    def test_fenced_json_with_trailing_text(self):
+        text = '```json\n{"activity": "a", "content": "c", "category": "其他"}\n```\n以上是识别结果。'
+        r = LLMClient.parse_recognition(text)
+        self.assertEqual(r["content"], "c")
+
+    def test_json_with_brace_inside_string(self):
+        """括号配平扫描不能被字符串里的 {} 干扰。"""
+        text = '{"activity": "修复bug", "content": "处理 {括号} 与 \\"引号\\" 的情况", "category": "代码开发"}'
+        r = LLMClient.parse_recognition(text)
+        self.assertEqual(r["activity"], "修复bug")
+        self.assertIn("{括号}", r["content"])
+
+    def test_unclosed_fence_still_parses(self):
+        """模型输出被截断（围栏未闭合）时也要能解析出 JSON。"""
+        text = '```json\n{"activity": "写代码", "content": "写代码", "category": "代码开发"}'
+        r = LLMClient.parse_recognition(text)
+        self.assertEqual(r["activity"], "写代码")
+
+    def test_empty_input(self):
+        r = LLMClient.parse_recognition("")
+        self.assertEqual(r["content"], "")
+        self.assertEqual(r["category"], "其他")
+
+    def test_garbage_input_does_not_raise(self):
+        r = LLMClient.parse_recognition("这不是 JSON，只是一段普通文字")
+        self.assertEqual(r["category"], "其他")
+        self.assertEqual(r["content"], "这不是 JSON，只是一段普通文字")
+
+    def test_chinese_key_aliases(self):
+        text = '{"活动": "写代码", "描述": "写代码", "分类": "代码开发"}'
+        r = LLMClient.parse_recognition(text)
+        self.assertEqual(r["activity"], "写代码")
+        self.assertEqual(r["category"], "代码开发")
+
 
 if __name__ == "__main__":
     unittest.main()

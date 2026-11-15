@@ -55,6 +55,38 @@ class TestAggregateStats(unittest.TestCase):
         # 集中时段 top_hour = 9 点（3600 秒）与 10 点（1800+... 实际 10 点有 30min 开会）
         self.assertIn(s["top_hour"], (9, 10))
 
+    # ---------- 回归：跨小时活动应按小时切片分摊 ----------
+
+    def test_cross_hour_entry_is_split(self):
+        """回归：10:50 - 11:10 的活动应分摊到 10 点和 11 点。
+
+        旧实现把整段记到开始小时，导致「集中时段」统计偏移。
+        """
+        entries = [
+            {"started_at": ts(10, 50), "ended_at": ts(11, 10), "content": "跨小时", "category": "代码开发"},
+        ]
+        s = aggregate_stats(entries)
+        self.assertEqual(s["total_duration"], 1200)
+        self.assertEqual(s["hourly"].get(10), 600)   # 10:50 - 11:00
+        self.assertEqual(s["hourly"].get(11), 600)   # 11:00 - 11:10
+        self.assertEqual(sum(s["hourly"].values()), 1200)
+        self.assertEqual(s["top_hour"], 10)  # 并列时取较小的小时（max 取首个）
+
+    def test_single_hour_entry_unchanged(self):
+        entries = [
+            {"started_at": ts(9, 0), "ended_at": ts(10, 0), "content": "写代码", "category": "代码开发"},
+        ]
+        s = aggregate_stats(entries)
+        self.assertEqual(s["hourly"], {9: 3600})
+
+    def test_zero_duration_entry(self):
+        entries = [
+            {"started_at": ts(9, 0), "ended_at": ts(9, 0), "content": "瞬时", "category": "其他"},
+        ]
+        s = aggregate_stats(entries)
+        self.assertEqual(s["total_duration"], 0)
+        self.assertEqual(sum(s["hourly"].values()), 0)
+
 
 class TestBuildReport(unittest.TestCase):
     def test_empty(self):

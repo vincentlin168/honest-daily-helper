@@ -49,6 +49,7 @@ class DailyHelper:
         self.config = Config(config_path)
         # store 只初始化一次（保持数据库连接稳定）
         self.store = RecordStore(self.config.get("storage", "db_path", default="records.db"))
+        self._last_report_date: Optional[str] = None
         self._init_capture_llm()
 
     def _init_capture_llm(self) -> None:
@@ -285,17 +286,30 @@ class DailyHelper:
             time.sleep(snap_interval)
 
     def _maybe_generate_report(self) -> None:
-        """到定时日报时间则自动生成。"""
+        """到定时日报时间则自动生成。
+
+        用「今日已生成」标记而非分钟字符串精确匹配，避免错过触发窗口
+        （程序重启、snap_interval > 60、那一分钟卡顿）导致日报静默丢失。
+        """
         trigger = self.config.get("report", "trigger", default="both")
         if trigger not in ("scheduled", "both"):
             return
         scheduled = self.config.get("report", "scheduled_time", default="18:00")
-        if datetime.now().strftime("%H:%M") == scheduled:
-            try:
-                report_md = self.generate_report()
-                print(f"\n===== 工作日报 =====\n{report_md}\n")
-            except Exception as exc:
-                print(f"[日报生成失败] {exc}")
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+
+        if self._last_report_date == today:
+            return  # 今天已生成过
+
+        if now.strftime("%H:%M") != scheduled:
+            return
+
+        try:
+            report_md = self.generate_report()
+            self._last_report_date = today
+            print(f"\n===== 工作日报 =====\n{report_md}\n")
+        except Exception as exc:
+            print(f"[日报生成失败] {exc}")
 
 
 def main():

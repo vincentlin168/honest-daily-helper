@@ -127,11 +127,13 @@ class Capture:
             new_size = (int(pil_img.width * ratio), int(pil_img.height * ratio))
             pil_img = pil_img.resize(new_size, Image.LANCZOS)
 
-        if not save_to_disk:
-            current = self.fingerprint(pil_img)
-            if current == self._last_hash:
-                return Screenshot()
-            self._last_hash = current
+        # 指纹始终更新：即使落盘也要记录当前画面，否则下次比较会拿到陈旧状态。
+        current = self.fingerprint(pil_img)
+        unchanged = (current == self._last_hash)
+        self._last_hash = current
+
+        if unchanged and not save_to_disk:
+            return Screenshot()
 
         buffer = io.BytesIO()
         pil_img.save(buffer, format="JPEG", quality=self.quality)

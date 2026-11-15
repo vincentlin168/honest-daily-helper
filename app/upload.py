@@ -49,21 +49,26 @@ class ReportUploader:
 
         body = {"event": event, "payload": payload}
         last_error = ""
+        last_status = 0
+        last_duration = 0
         for attempt in range(self.MAX_RETRY + 1):
             started = time.perf_counter()
             try:
                 with httpx.Client(timeout=self.REQUEST_TIMEOUT) as client:
                     response = client.post(self.url, headers=self._headers(), json=body)
-                duration_ms = int((time.perf_counter() - started) * 1000)
+                last_duration = int((time.perf_counter() - started) * 1000)
+                last_status = response.status_code
                 if response.status_code < 300:
-                    return {"ok": True, "http_status": response.status_code, "duration_ms": duration_ms}
+                    return {"ok": True, "http_status": response.status_code, "duration_ms": last_duration}
                 last_error = f"HTTP {response.status_code}: {response.text[:200]}"
             except httpx.TimeoutException:
                 last_error = "超时"
+                last_duration = int((time.perf_counter() - started) * 1000)
             except httpx.RequestError as exc:
                 last_error = f"连接失败：{exc}"
+                last_duration = int((time.perf_counter() - started) * 1000)
             # 非 2xx 或网络错误，重试
-        return {"ok": False, "http_status": getattr(response, "status_code", 0), "duration_ms": 0, "error": last_error}
+        return {"ok": False, "http_status": last_status, "duration_ms": last_duration, "error": last_error}
 
     def upload_daily_report(self, date: str, report_md: str) -> Dict[str, Any]:
         """上报某天的日报。"""
