@@ -33,6 +33,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import aggregate
+from archive import ReportArchive
 from capture import Capture
 from config import Config
 from http_client import make_client
@@ -54,6 +55,10 @@ class DailyHelper:
         # store 只初始化一次（保持数据库连接稳定）
         self.store = RecordStore(self.config.get("storage", "db_path", default="records.db"))
         self._last_report_date: Optional[str] = None
+        # 日报留档目录：优先配置，默认 app/outputs/reports
+        archive_dir = self.config.get("storage", "archive_dir", default="outputs/reports")
+        self.archive = ReportArchive(archive_dir)
+        self.export_dir = self.config.get("storage", "export_dir", default="exports")
         self._init_capture_llm()
 
     def _init_capture_llm(self) -> None:
@@ -86,6 +91,24 @@ class DailyHelper:
             use_system_proxy=bool(up_cfg.get("use_system_proxy", False)),
         )
 
+    def _extend_current_activity(self) -> None:
+        """把上一条活动记录延长到当前时刻。
+
+        这是「不遗漏」的关键：屏幕像素不变时（读代码、看文档、思考），
+        活动时间仍应计入。延长而不是新建，避免时间线碎片化。
+
+        连续多次延长会受 ``aggregate.MAX_DURATION``（4 小时）封顶，
+        保证单条记录不会无限延长。
+        """
+        latest = self.store.latest_entry()
+        if not latest:
+            return
+        now = int(datetime.now().timestamp())
+        try:
+            self.store.extend_entry(latest["id"], now, aggregate.MAX_DURATION)
+        except Exception as exc:
+            log.warning("[延长记录失败] %s", exc)
+
     def _reload_settings(self) -> None:
         """设置更新后重建 capture/llm/uploader（不重建 store）。"""
         self._init_capture_llm()
@@ -95,9 +118,24 @@ class DailyHelper:
         """抓屏 + 识别（不聚合、不写 entries）。
 
         密集抓屏循环调用：画面没变返回 None，变化则识别并返回 recognition（含 _at 时间戳）。
+
+        画面未变化时的关键处理
+        ----------------------
+        画面没变 **不代表没在工作** —— 恰恰相反，绝大多数时间是用户在读代码、
+        看文档、写文字，屏幕像素可能长时间不变。
+
+        所以画面未变时必须做两件事：
+        1. **延长上一条活动记录**（ended_at 推到当前时刻），否则时间线会「断裂」；
+        2. **记一条 skip_event**，留下「这段时间屏幕没动过」的痕迹，可回溯。
+
+        少了第 1 步，实测会出现：9.5 小时的工作只记录了 4 小时，
+        **58% 的工作时间在时间线上完全不可见**（见 tests/test_capture_interval.py）。
         """
         shot = self.capture.grab(save_to_disk=False)
         if shot.is_empty:
+            # 画面未变：跳过识别（省 token），但要延长上一条记录 + 留痕
+            self._extend_current_activity()
+            self.store.insert_skip_event("unchanged")
             return None
 
         started = time.perf_counter()
@@ -239,6 +277,16 @@ class DailyHelper:
 
         report_md = build_report(entries, date, ai_analysis=ai_analysis)
 
+        # 日报留档：每次生成都存一份到 outputs/reports/YYYY-MM-DD.md
+        # （文件留档而非加表：日报是文档，用编辑器直接打开更自然）
+        try:
+            if self.archive:
+                path = self.archive.save(date, report_md)
+                if path:
+                    log.info("[日报留档] %s", path)
+        except Exception as exc:
+            log.warning("[日报留档失败] %s", exc)
+
         # 可选：上报
         if self.uploader.enabled:
             self.uploader.upload_daily_report(date, report_md)
@@ -259,6 +307,8 @@ class DailyHelper:
                 config=self.config,
                 settings_callback=self._reload_settings,
                 llm_tester=self.llm.test_connection,
+                archive=self.archive,
+                export_dir=self.export_dir,
             )
             threading.Thread(target=server.run, daemon=True).start()
 

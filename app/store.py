@@ -123,6 +123,67 @@ class RecordStore:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def update_entry(self, entry_id: int, **fields: Any) -> bool:
+        """手动修改一条记录的可编辑字段。
+
+        仅允许白名单字段（避免把 id / started_at 之类的内部列改坏）。
+        可编辑：activity / content / category。
+        """
+        editable = ("activity", "content", "category")
+        sets = []
+        values = []
+        for key in editable:
+            if key in fields:
+                sets.append(f"{key} = ?")
+                values.append(str(fields[key]))
+        if not sets:
+            return False
+        values.append(int(entry_id))
+        with self._lock:
+            cur = self._conn.execute(
+                f"UPDATE entries SET {', '.join(sets)} WHERE id = ?",
+                values,
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def delete_entry(self, entry_id: int) -> bool:
+        """删除一条记录（识别错了就删掉，不留脏数据）。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM entries WHERE id = ?",
+                (int(entry_id),),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def get_entry(self, entry_id: int) -> Optional[Dict[str, Any]]:
+        """按 id 取单条记录。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM entries WHERE id = ?",
+                (int(entry_id),),
+            ).fetchone()
+        return self._to_dict(row) if row else None
+
+    def categories_in_use(self, date_str: Optional[str] = None) -> List[str]:
+        """已出现过的分类（用于时间线编辑的下拉选项）。"""
+        with self._lock:
+            if date_str:
+                day_start = int(datetime.fromisoformat(date_str).timestamp())
+                day_end = day_start + 86400
+                rows = self._conn.execute(
+                    """SELECT DISTINCT category FROM entries
+                       WHERE started_at >= ? AND started_at < ?
+                       ORDER BY category""",
+                    (day_start, day_end),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT DISTINCT category FROM entries ORDER BY category"
+                ).fetchall()
+        return [r["category"] for r in rows if r["category"]]
+
     def latest_entry(self) -> Optional[Dict[str, Any]]:
         """取最新一条记录（用于聚合判断「内容是否与上一条相同」）。"""
         with self._lock:
@@ -239,6 +300,70 @@ class RecordStore:
             "calls": int(row["calls"]),
         }
 
+    # ---------- 成本 ----------
+    def interval_effectiveness(self, days: int = 7) -> Dict[str, Any]:
+        """实测「抓屏间隔」与「汇总写入周期」是否真的有效。
+
+        这是给用户的**诚实数据** —— 不说参数有用，而是用真实记录算出：
+        1. 实际识别间隔分布（抓屏间隔是否按配置生效）
+        2. 时间线覆盖率（活动时间有多少被记录下来）
+        3. 聚合压缩比（多少次识别合并成一段）
+
+        :param days: 统计窗口天数
+        """
+        days = max(1, min(90, int(days)))
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ts = int((today - timedelta(days=days - 1)).timestamp())
+        end_ts = int((today + timedelta(days=1)).timestamp())
+
+        with self._lock:
+            calls = self._conn.execute(
+                """SELECT at FROM llm_calls
+                    WHERE ok = 1 AND at >= ? AND at < ? ORDER BY at""",
+                (start_ts, end_ts),
+            ).fetchall()
+            entries = self._conn.execute(
+                """SELECT started_at, ended_at FROM entries
+                    WHERE started_at >= ? AND started_at < ? ORDER BY started_at""",
+                (start_ts, end_ts),
+            ).fetchall()
+            skips = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM skip_events WHERE at >= ? AND at < ?",
+                (start_ts, end_ts),
+            ).fetchone()["c"]
+
+        ats = [int(r["at"]) for r in calls]
+        gaps = [ats[i + 1] - ats[i] for i in range(len(ats) - 1)]
+
+        # 覆盖率：entries 记录的总时长 / 实际运行跨度
+        recorded = sum(int(r["ended_at"]) - int(r["started_at"]) for r in entries)
+        span = (ats[-1] - ats[0]) if len(ats) >= 2 else 0
+
+        # 聚合压缩比：识别次数 / 活动段数
+        segments = len(entries)
+
+        def pct(values, p):
+            if not values:
+                return 0
+            return values[int(len(values) * p)]
+
+        sorted_gaps = sorted(gaps)
+        return {
+            "days": days,
+            "recognitions": len(ats),
+            "segments": segments,
+            "skipped": int(skips),
+            "span_seconds": span,
+            "recorded_seconds": recorded,
+            "coverage": (recorded / span) if span else 0.0,
+            "compression": (len(ats) / segments) if segments else 0.0,
+            "gap_median": pct(sorted_gaps, 0.5),
+            "gap_p75": pct(sorted_gaps, 0.75),
+            "gap_p95": pct(sorted_gaps, 0.95),
+            "gap_max": sorted_gaps[-1] if sorted_gaps else 0,
+            "gap_over_5min": sum(1 for g in gaps if g > 300),
+        }
+
     # ---------- llm_calls ----------
     def insert_llm_call(self, call: Dict[str, Any]) -> None:
         now = int(datetime.now().timestamp())
@@ -262,6 +387,66 @@ class RecordStore:
                 ),
             )
             self._conn.commit()
+
+    # ---------- 错误诊断（复用 llm_calls，不另建 error_logs 表）----------
+    def recent_errors(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """最近的失败调用（用于「错误可追溯」诊断页）。
+
+        设计：复用 ``llm_calls.error`` 字段，不另建 error_logs 表 ——
+        错误本来就是调用失败的一种，拆表只会让同一件事存在两处。
+
+        :param limit: 最多返回条数
+        """
+        limit = max(1, min(500, int(limit)))
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT id, at, feature, model, http_status, error, latency_ms
+                     FROM llm_calls WHERE ok = 0 AND error != ''
+                    ORDER BY at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [self._to_dict(r) for r in rows]
+
+    def error_summary(self, days: int = 7) -> Dict[str, Any]:
+        """错误统计：按「错误类型」聚合，便于一眼看出主要故障源。
+
+        错误类型取错误串的前缀（如 ``ConnectionError:`` / ``[401]``），
+        这样「Key 失效」和「网络超时」不会被混为一谈。
+        """
+        days = max(1, min(90, int(days)))
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ts = int((today - timedelta(days=days - 1)).timestamp())
+        end_ts = int((today + timedelta(days=1)).timestamp())
+
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT error, model, at FROM llm_calls
+                    WHERE ok = 0 AND error != '' AND at >= ? AND at < ?""",
+                (start_ts, end_ts),
+            ).fetchall()
+            total_calls = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM llm_calls WHERE at >= ? AND at < ?",
+                (start_ts, end_ts),
+            ).fetchone()["c"]
+
+        buckets: Dict[str, int] = {}
+        for row in rows:
+            err = row["error"]
+            # 归类：取第一个分隔符前的部分作为类型
+            kind = err.split(":")[0][:60] if ":" in err else err[:60]
+            buckets[kind] = buckets.get(kind, 0) + 1
+
+        by_kind = sorted(buckets.items(), key=lambda kv: kv[1], reverse=True)
+        total_errors = len(rows)
+
+        return {
+            "days": days,
+            "total_calls": int(total_calls),
+            "total_errors": total_errors,
+            "error_rate": (total_errors / total_calls) if total_calls else 0.0,
+            "by_kind": [{"kind": k, "count": c} for k, c in by_kind],
+            "recent": self.recent_errors(20),
+        }
 
     # ---------- skip_events ----------
     def insert_skip_event(self, kind: str, at: Optional[int] = None) -> None:

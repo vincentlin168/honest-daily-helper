@@ -59,6 +59,23 @@
   .cat-list .bar i { display: block; height: 100%; background: var(--navy-light); }
   .cat-list .name { min-width: 90px; }
   .cat-list .val { min-width: 80px; text-align: right; color: var(--muted); }
+  /* 错误诊断 */
+  .err-list { list-style: none; }
+  .err-list li { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .err-list li:last-child { border-bottom: none; }
+  .err-list .kind { color: #b91c1c; font-weight: 600; }
+  .err-list .when { color: var(--muted); font-size: 11px; }
+  .err-list .msg { color: #475569; font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; margin-top: 3px; }
+  /* 留档列表 */
+  .arch-list { list-style: none; }
+  .arch-list li { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .arch-list li:last-child { border-bottom: none; }
+  .arch-list .d { font-weight: 600; min-width: 90px; }
+  .arch-list .p { color: var(--muted); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .arch-list .sz { color: var(--muted); font-size: 11px; }
+  /* 导出预览 */
+  .export-out { width: 100%; height: 320px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: #f9fafb; resize: vertical; }
+  .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
   .toolbar input[type=date] { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
   .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; background: var(--gold); color: #fff; font-weight: 500; }
@@ -98,6 +115,8 @@
     <button data-tab="overview" class="active">概览</button>
     <button data-tab="timeline">时间线</button>
     <button data-tab="report">日报</button>
+    <button data-tab="archive">留档</button>
+    <button data-tab="data">数据</button>
     <button data-tab="settings">设置</button>
   </div>
 
@@ -157,6 +176,60 @@
       </div>
     </div>
 
+    <!-- 留档 -->
+    <div id="archive" class="panel">
+      <div class="card">
+        <h2>日报留档</h2>
+        <div class="hint" style="margin-bottom:12px">每次生成日报都会在这里存一份 Markdown 文件，随时可用编辑器打开、拷进笔记软件或邮件</div>
+        <ul class="arch-list" id="arch-list"><div class="empty">加载中…</div></ul>
+      </div>
+      <div class="card">
+        <h2>留档内容</h2>
+        <input type="date" id="arch-date" style="margin-bottom:10px">
+        <button class="btn secondary" onclick="loadArchiveBody()">查看</button>
+        <div id="arch-body" style="margin-top:12px"><div class="empty">选择日期查看留档内容</div></div>
+      </div>
+    </div>
+
+    <!-- 数据（导出 + 错误诊断） -->
+    <div id="data" class="panel">
+      <div class="card">
+        <h2>导出我的数据</h2>
+        <div class="hint" style="margin-bottom:12px">
+          你的数据属于你自己。导出成开放格式（JSON / Markdown / CSV），不带任何厂商格式、不加密、不联网。
+          这样你随时能换工具、自己分析、或者只是备份。
+        </div>
+        <div class="row-actions" style="margin-bottom:12px">
+          <select id="exp-date" style="padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="">全部记录（最近 90 天）</option>
+          </select>
+          <select id="exp-format" style="padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="json">JSON（程序分析）</option>
+            <option value="md">Markdown（可读）</option>
+            <option value="csv">CSV（表格）</option>
+          </select>
+          <button class="btn secondary" onclick="previewExport()">预览</button>
+          <button class="btn" onclick="saveExport()">导出到文件</button>
+        </div>
+        <textarea class="export-out" id="exp-preview" readonly placeholder="点「预览」查看导出内容"></textarea>
+        <div class="hint" style="margin-top:8px">导出文件保存在 exports/ 目录</div>
+      </div>
+
+      <div class="card">
+        <h2>错误诊断</h2>
+        <div class="toolbar">
+          <select id="err-days" style="padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="1">今天</option>
+            <option value="7" selected>最近 7 天</option>
+            <option value="30">最近 30 天</option>
+          </select>
+          <button class="btn secondary" onclick="loadErrors()">刷新</button>
+        </div>
+        <div id="err-summary" style="margin-bottom:14px"></div>
+        <ul class="err-list" id="err-list"><div class="empty">加载中…</div></ul>
+      </div>
+    </div>
+
     <!-- 设置 -->
     <div id="settings" class="panel">
       <div class="card">
@@ -170,6 +243,7 @@
           <label>汇总写入周期（秒）</label>
           <input type="number" id="set-interval" min="30" max="3600" value="120">
           <div class="hint">识别结果攒够这个周期后，才聚合成「时间段」写进时间线。周期越长，聚合合并的效果越好</div>
+          <div class="hint" id="interval-effect" style="margin-top:6px;color:#0369a1"></div>
         </div>
         <div class="form-row">
           <label>区域预设</label>
@@ -275,9 +349,11 @@
       document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById(btn.dataset.tab).classList.add('active');
-      if (btn.dataset.tab === 'settings') loadSettings();
+      if (btn.dataset.tab === 'settings') { loadSettings(); loadIntervalEffect(); }
       if (btn.dataset.tab === 'timeline') loadTimeline();
       if (btn.dataset.tab === 'overview') { loadOverview(); loadHeatmap(); }
+      if (btn.dataset.tab === 'archive') loadArchive();
+      if (btn.dataset.tab === 'data') { loadErrors(); loadExportDates(); }
     });
   });
 
@@ -383,6 +459,31 @@
     return 'l1';
   }
 
+  // 抓屏间隔 / 汇总周期的实测效果（诚实数据：真实测量，不空口承诺）
+  async function loadIntervalEffect() {
+    const box = document.getElementById('interval-effect');
+    if (!box) return;
+    try {
+      const r = await fetch('/api/intervals?days=7');
+      const d = await r.json();
+      if (!d.ok) { box.textContent = ''; return; }
+      const cov = (d.coverage * 100).toFixed(0);
+      const comp = d.compression ? d.compression.toFixed(1) : '—';
+      const snap = d.configured_snap_interval ?? '—';
+      const sum = d.configured_summary_interval ?? '—';
+      const median = d.gap_median;
+      const over = d.gap_over_5min;
+      box.innerHTML =
+        `实测（近 7 天）：识别 <b>${d.recognitions}</b> 次 / 活动段 <b>${d.segments}</b> 段`
+        + ` · 聚合压缩比 <b>${comp}</b>:1`
+        + ` · 实际间隔中位 <b>${median}s</b>（配置 ${snap}s）`
+        + ` · 时间线覆盖率 <b>${cov}%</b>`
+        + (over ? ` · 有 <b style="color:#b91c1c">${over}</b> 处间隔超 5 分钟` : '')
+        + `<br><span style="color:#64748b">覆盖率高说明工作时间基本都记下来了；`
+        + `压缩比高说明同一活动被合并得好（时间线不会被切碎）。</span>`;
+    } catch (e) { box.textContent = ''; }
+  }
+
   // 时间线
   async function loadTimeline() {
     const date = document.getElementById('tl-date').value;
@@ -396,16 +497,32 @@
       }
       const cats = window._categories || [];
       list.innerHTML = data.entries.map(e => `
-        <div class="entry">
+        <div class="entry" id="entry-${e.id}">
           <div class="head">
             <span class="time">${esc(fmtTime(e.started_at))} - ${esc(fmtTime(e.ended_at))}</span>
-            <span class="activity">${esc(e.activity || e.content || '')}</span>
+            <span class="activity" id="act-${e.id}">${esc(e.activity || e.content || '')}</span>
             <select class="cat-select" onchange="changeCategory(${e.id}, this.value)">
               ${cats.map(c => `<option value="${esc(c)}" ${c===e.category?'selected':''}>${esc(c)}</option>`).join('')}
               ${!cats.includes(e.category) ? `<option value="${esc(e.category)}" selected>${esc(e.category)}</option>` : ''}
             </select>
+            <button class="btn secondary" style="padding:3px 8px;font-size:11px" onclick="editEntry(${e.id})">编辑</button>
+            <button class="btn secondary" style="padding:3px 8px;font-size:11px" onclick="deleteEntry(${e.id})">删除</button>
           </div>
-          <div class="content">${esc(e.content)}</div>
+          <div class="content" id="cnt-${e.id}">${esc(e.content)}</div>
+          <div class="edit-box" id="edit-${e.id}" style="display:none;margin-top:8px">
+            <div class="form-row">
+              <label>活动</label>
+              <input type="text" id="edit-act-${e.id}" value="${esc(e.activity || '')}">
+            </div>
+            <div class="form-row">
+              <label>内容</label>
+              <textarea id="edit-cnt-${e.id}" rows="3">${esc(e.content)}</textarea>
+            </div>
+            <div class="row-actions">
+              <button class="btn" onclick="saveEntry(${e.id})">保存</button>
+              <button class="btn secondary" onclick="toggleEdit(${e.id})">取消</button>
+            </div>
+          </div>
         </div>`).join('');
     } catch (e) {
       list.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
@@ -426,6 +543,183 @@
       });
       toast('分类已更新');
     } catch (e) { toast('更新失败'); }
+  }
+
+  // 编辑 / 删除记录
+  function toggleEdit(id) {
+    const box = document.getElementById('edit-' + id);
+    if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  }
+
+  function editEntry(id) { toggleEdit(id); }
+
+  async function saveEntry(id) {
+    const activity = document.getElementById('edit-act-' + id).value;
+    const content = document.getElementById('edit-cnt-' + id).value;
+    try {
+      const r = await fetch('/api/entries/' + id, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({activity: activity, content: content})
+      });
+      const d = await r.json();
+      if (!d.ok) { toast('保存失败：' + (d.error || '未知错误')); return; }
+      document.getElementById('act-' + id).textContent = activity;
+      document.getElementById('cnt-' + id).textContent = content;
+      toggleEdit(id);
+      toast('已保存');
+      loadOverview();
+    } catch (e) { toast('保存失败：' + e.message); }
+  }
+
+  async function deleteEntry(id) {
+    if (!confirm('确定删除这条记录？删除后无法恢复。')) return;
+    try {
+      const r = await fetch('/api/entries/' + id + '/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+      });
+      const d = await r.json();
+      if (!d.ok) { toast('删除失败'); return; }
+      const el = document.getElementById('entry-' + id);
+      if (el) el.remove();
+      toast('已删除');
+      loadOverview();
+    } catch (e) { toast('删除失败：' + e.message); }
+  }
+
+  // 日报留档
+  async function loadArchive() {
+    const box = document.getElementById('arch-list');
+    try {
+      const r = await fetch('/api/archive');
+      const d = await r.json();
+      if (!d.reports || !d.reports.length) {
+        box.innerHTML = '<div class="empty">还没有留档。生成一次日报就会自动存档</div>';
+        return;
+      }
+      box.innerHTML = d.reports.map(item => `
+        <li>
+          <span class="d">${esc(item.date)}</span>
+          <span class="p" title="${esc(item.path)}">${esc(item.file)}</span>
+          <span class="sz">${Math.round(item.size/1024*10)/10} KB</span>
+          <button class="btn secondary" style="padding:3px 8px;font-size:11px" onclick="viewArchive('${esc(item.date)}')">查看</button>
+        </li>`).join('');
+      const sel = document.getElementById('arch-date');
+      if (!sel.value && d.reports.length) sel.value = d.reports[0].date;
+    } catch (e) {
+      box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function viewArchive(date) {
+    document.getElementById('arch-date').value = date;
+    loadArchiveBody();
+  }
+
+  async function loadArchiveBody() {
+    const date = document.getElementById('arch-date').value;
+    const box = document.getElementById('arch-body');
+    if (!date) { box.innerHTML = '<div class="empty">选择日期查看留档内容</div>'; return; }
+    try {
+      const r = await fetch('/api/archive/body?date=' + date);
+      const d = await r.json();
+      if (!d.ok) { box.innerHTML = '<div class="empty">' + esc(d.error || '没有该日期的留档') + '</div>'; return; }
+      box.innerHTML = '<pre style="white-space:pre-wrap;font-size:13px;line-height:1.6">' + esc(d.report) + '</pre>';
+    } catch (e) {
+      box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  // 数据导出
+  async function loadExportDates() {
+    const sel = document.getElementById('exp-date');
+    if (sel.dataset.loaded) return;
+    try {
+      const r = await fetch('/api/archive');
+      const d = await r.json();
+      const dates = (d.reports || []).map(x => x.date);
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">全部记录（最近 90 天）</option>' +
+        dates.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+      sel.value = cur;
+      sel.dataset.loaded = '1';
+    } catch (e) { /* 忽略 */ }
+  }
+
+  async function previewExport() {
+    const date = document.getElementById('exp-date').value;
+    const format = document.getElementById('exp-format').value;
+    const box = document.getElementById('exp-preview');
+    box.value = '生成中…';
+    try {
+      const r = await fetch(`/api/export/preview?date=${date}&format=${format}`);
+      const d = await r.json();
+      if (!d.ok) { box.value = '失败：' + (d.error || '未知错误'); return; }
+      box.value = d.content;
+      toast(d.count + ' 条记录');
+    } catch (e) { box.value = '失败：' + e.message; }
+  }
+
+  async function saveExport() {
+    const date = document.getElementById('exp-date').value;
+    const format = document.getElementById('exp-format').value;
+    try {
+      const r = await fetch('/api/export', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({date: date, format: format})
+      });
+      const d = await r.json();
+      if (!d.ok) { toast('导出失败：' + (d.error || '未知错误')); return; }
+      toast(d.message);
+    } catch (e) { toast('导出失败：' + e.message); }
+  }
+
+  // 错误诊断
+  async function loadErrors() {
+    const days = document.getElementById('err-days').value;
+    const sumBox = document.getElementById('err-summary');
+    const list = document.getElementById('err-list');
+    try {
+      const r = await fetch('/api/errors?days=' + days);
+      const d = await r.json();
+      if (!d.ok) { list.innerHTML = '<div class="empty">加载失败</div>'; return; }
+
+      const rate = ((d.error_rate || 0) * 100).toFixed(1);
+      sumBox.innerHTML = `
+        <div class="stat-grid">
+          <div class="stat"><div class="label">调用总数</div><div class="value">${d.total_calls}</div></div>
+          <div class="stat ${d.total_errors ? 'accent' : ''}"><div class="label">失败次数</div><div class="value">${d.total_errors}</div><div class="sub">错误率 ${rate}%</div></div>
+          <div class="stat" style="grid-column:span 2"><div class="label">主要故障源</div><div class="value small">${(d.by_kind || []).length ? esc(d.by_kind.map(k => k.kind + ' × ' + k.count).join('　')) : '无'}</div></div>
+        </div>`;
+
+      const recent = d.recent || [];
+      if (!recent.length) {
+        list.innerHTML = '<div class="empty">没有失败记录，一切正常</div>';
+        return;
+      }
+      list.innerHTML = recent.map(e => `
+        <li>
+          <span class="kind">${esc(kindOf(e.error))}</span>
+          <span class="when">${esc(fmtDateTime(e.at))} · ${esc(e.model || '')} · ${e.latency_ms}ms</span>
+          <div class="msg">${esc(e.error)}</div>
+        </li>`).join('');
+    } catch (e) {
+      list.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  function kindOf(err) {
+    if (!err) return '未知';
+    return err.includes(':') ? err.split(':')[0].slice(0, 40) : err.slice(0, 40);
+  }
+
+  function fmtDateTime(ts) {
+    const d = new Date(ts * 1000);
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')
+      + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
   }
 
   // 日报

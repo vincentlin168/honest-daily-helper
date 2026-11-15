@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, parse_qs
 
+import exporter
+from archive import ReportArchive
 from overview import build_overview
 
 
@@ -51,6 +53,8 @@ class SkillHandler(BaseHTTPRequestHandler):
     config = None             # Config 实例
     settings_callback = None  # 设置更新后的回调（热更新模块）
     llm_tester = None         # 连通性测试回调（返回 {ok, reply|error}）
+    archive = None            # ReportArchive（日报留档）
+    export_dir = "exports"    # 数据导出目录
 
     def _authorized(self) -> bool:
         if not self.token:
@@ -81,6 +85,35 @@ class SkillHandler(BaseHTTPRequestHandler):
             return json.loads(raw.decode("utf-8"))
         except Exception:
             return {}
+
+    # ---------- 导出辅助 ----------
+    def _entries_for_export(self, date_str: str) -> list:
+        """取待导出的记录。date 为空则导出全部（有上限）。"""
+        if not self.store:
+            return []
+        if date_str:
+            return self.store.entries_by_day(date_str)
+        # 全部：取最近 90 天
+        from datetime import timedelta
+        end = int(datetime.now().timestamp())
+        start = end - 90 * 86400
+        return self.store.entries_in_range(start, end)
+
+    def _render_export(self, entries: list, date_str: str, fmt: str):
+        """按格式渲染导出内容。不支持的格式返回 None。"""
+        fmt = (fmt or "json").lower()
+        if fmt == "json":
+            meta = {"scope": date_str or "all", "tool": "诚实日报助手"}
+            return exporter.export_json(entries, meta)
+        if fmt == "csv":
+            return exporter.export_csv(entries)
+        if fmt in ("md", "markdown"):
+            report_md = None
+            arch = type(self).archive
+            if date_str and arch:
+                report_md = arch.load(date_str)
+            return exporter.export_markdown(entries, date_str or None, report_md)
+        return None
 
     # ---------- GET ----------
     def do_GET(self):
@@ -153,6 +186,63 @@ class SkillHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "days": days, "grid": grid})
             return
 
+        # 抓屏间隔 / 汇总周期的实测效果
+        if path == "/api/intervals":
+            try:
+                days = int((query.get("days") or [7])[0])
+            except (TypeError, ValueError):
+                days = 7
+            data = self.store.interval_effectiveness(days) if self.store else {}
+            cfg = type(self).config
+            if cfg:
+                data["configured_snap_interval"] = int(
+                    cfg.get("capture", "snap_interval", default=15) or 15)
+                data["configured_summary_interval"] = int(
+                    cfg.get("capture", "interval", default=120) or 120)
+            self._send_json({"ok": True, **data})
+            return
+
+        # 错误诊断：复用 llm_calls.error，不另建 error_logs 表
+        if path == "/api/errors":
+            try:
+                days = int((query.get("days") or [7])[0])
+            except (TypeError, ValueError):
+                days = 7
+            summary = self.store.error_summary(days) if self.store else {}
+            self._send_json({"ok": True, **summary})
+            return
+
+        # 日报留档列表
+        if path == "/api/archive":
+            arch = type(self).archive
+            items = arch.list_reports() if arch else []
+            self._send_json({"ok": True, "reports": items})
+            return
+
+        # 读取某天的留档正文
+        if path == "/api/archive/body":
+            date = (query.get("date") or [""])[0]
+            arch = type(self).archive
+            body = arch.load(date) if arch else None
+            if body is None:
+                self._send_json({"ok": False, "error": "没有该日期的留档"}, status=404)
+                return
+            self._send_json({"ok": True, "date": date, "report": body})
+            return
+
+        # 导出预览（不写文件，仅返回内容，便于前端「复制到剪贴板」）
+        if path == "/api/export/preview":
+            date = (query.get("date") or [""])[0]
+            fmt = (query.get("format") or ["json"])[0]
+            entries = self._entries_for_export(date)
+            content = self._render_export(entries, date, fmt)
+            if content is None:
+                self._send_json({"ok": False, "error": f"不支持的格式: {fmt}"}, status=400)
+                return
+            self._send_json({"ok": True, "format": fmt, "date": date,
+                             "content": content, "count": len(entries)})
+            return
+
         self._send_json({"ok": False, "error": f"unknown path: {path}"}, status=404)
 
     # ---------- POST ----------
@@ -192,6 +282,69 @@ class SkillHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": ok})
             return
 
+        # 编辑记录：/api/entries/{id} —— 改 activity / content / category
+        if path.startswith("/api/entries/") and path.count("/") == 3:
+            try:
+                entry_id = int(path.split("/")[3])
+            except (IndexError, ValueError):
+                self._send_json({"ok": False, "error": "invalid id"}, status=400)
+                return
+            body = self._read_json_body()
+            fields = {k: body[k] for k in ("activity", "content", "category") if k in body}
+            if not fields:
+                self._send_json({"ok": False, "error": "没有可编辑字段"}, status=400)
+                return
+            ok = self.store.update_entry(entry_id, **fields) if self.store else False
+            entry = self.store.get_entry(entry_id) if (ok and self.store) else None
+            self._send_json({"ok": ok, "entry": entry})
+            return
+
+        # 删除记录：/api/entries/{id}/delete
+        if path.startswith("/api/entries/") and path.endswith("/delete"):
+            try:
+                entry_id = int(path.split("/")[3])
+            except (IndexError, ValueError):
+                self._send_json({"ok": False, "error": "invalid id"}, status=400)
+                return
+            ok = self.store.delete_entry(entry_id) if self.store else False
+            self._send_json({"ok": ok})
+            return
+
+        # 导出到文件：/api/export
+        if path == "/api/export":
+            body = self._read_json_body()
+            date = body.get("date", "") or ""
+            fmt = body.get("format", "json") or "json"
+            entries = self._entries_for_export(date)
+            content = self._render_export(entries, date, fmt)
+            if content is None:
+                self._send_json({"ok": False, "error": f"不支持的格式: {fmt}"}, status=400)
+                return
+            from pathlib import Path
+            root = Path(type(self).export_dir or "exports")
+            root.mkdir(parents=True, exist_ok=True)
+            stem = date or "全部记录"
+            ext = {"json": "json", "csv": "csv", "md": "md", "markdown": "md"}.get(fmt.lower(), "txt")
+            path = root / f"{stem}.{ext}"
+            exporter.write_export(str(path), content)
+            self._send_json({
+                "ok": True,
+                "path": str(path.resolve()),
+                "format": fmt,
+                "count": len(entries),
+                "message": f"已导出 {len(entries)} 条记录到 {path.resolve()}",
+            })
+            return
+
+        # 删除留档：/api/archive/delete
+        if path == "/api/archive/delete":
+            body = self._read_json_body()
+            date = body.get("date", "") or ""
+            arch = type(self).archive
+            ok = arch.delete(date) if arch else False
+            self._send_json({"ok": ok})
+            return
+
         # 更新设置：/api/settings
         if path == "/api/settings":
             body = self._read_json_body()
@@ -221,7 +374,7 @@ class SkillServer:
 
     def __init__(self, store, token: str = "", port: int = 8088,
                  report_builder=None, config=None, settings_callback=None,
-                 llm_tester=None):
+                 llm_tester=None, archive=None, export_dir: str = "exports"):
         self.store = store
         self.port = port
         SkillHandler.store = store
@@ -230,6 +383,8 @@ class SkillServer:
         SkillHandler.config = config
         SkillHandler.settings_callback = settings_callback
         SkillHandler.llm_tester = llm_tester
+        SkillHandler.archive = archive
+        SkillHandler.export_dir = export_dir
 
     def run(self):
         # daemon_threads=True：请求线程随主进程退出，避免关不掉
