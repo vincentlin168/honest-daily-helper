@@ -91,6 +91,6 @@ python -m unittest discover -s tests -v
 
 ## 设计参考
 
-- 识别 prompt / 数据模型 / 日报模板：本项目自行设计与实现
 - 变更检测 / 视觉 LLM 客户端：参考 ScreenPipe 开源项目
 - 日报混合模式：参考 Work_Review 开源项目
+- 识别 prompt / 数据模型 / 日报模板：本项目自行设计与实现
