@@ -54,17 +54,21 @@ print(h.generate_report("2026-11-15", with_ai=True))
 ## 目录结构
 
 ```
-app/
-├── config.py         配置（JSON，零依赖）
-├── capture.py        截屏 + 像素变更检测（省 token）
-├── llm_client.py     视觉 LLM 客户端（DeepSeek-flash + 内置识别 prompt）
-├── store.py          SQLite 存储（entries/llm_calls/skip_events）
-├── aggregate.py      活动会话聚合
-├── report.py         日报生成（统计 + 模板 + AI 分析）
-├── upload.py         数据上报（可选）
-├── skill_server.py   Skill 本地服务（http.server）
-├── main.py           主编排
-└── tests/            58 个单元/端到端测试
+诚实日报助手/
+├── .gitignore
+├── 开发计划.md          开发路线与阶段验收标准
+└── app/
+    ├── config.py         配置（JSON，零依赖）
+    ├── capture.py        截屏 + 像素变更检测（省 token）
+    ├── llm_client.py     视觉 LLM 客户端（DeepSeek-flash + 内置识别 prompt）
+    ├── store.py          SQLite 存储（entries/llm_calls/skip_events）
+    ├── aggregate.py      活动会话聚合
+    ├── report.py         日报生成（统计 + 模板 + AI 分析）
+    ├── upload.py         数据上报（可选）
+    ├── skill_server.py   Skill 本地服务（http.server）
+    ├── main.py           主编排
+    ├── web_ui.html       Web 界面（时间线 / 日报 / 设置）
+    └── tests/            79 个单元/端到端测试
 ```
 
 ## 运行测试
@@ -73,6 +77,9 @@ app/
 cd app
 python -m unittest discover -s tests -v
 ```
+
+> **注意**：若本机开启了系统代理，`test_services.py` 需用 `trust_env=False` 访问
+> `127.0.0.1`，否则本地请求会被代理转发导致 502。
 
 ## 设计原则（诚实）
 
