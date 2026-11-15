@@ -24,6 +24,26 @@ venv/
 .DS_Store
 Thumbs.db
 
+# ---------- 逆向标本 / 参考二进制（仅本地留档，禁止提交） ----------
+# 小黑日报助手逆向样本：商业闭源产物，不属于本项目源码
+*.zip
+*.rar
+*.7z
+xiaohei-lite-*
+xiaohei_lite*
+*小黑*
+app/xiaohei-lite-0.1.0-windows-x64.zip
+
+# 逆向过程产物（临时脚本 / 提取物 / 分析报告）
+_strings.ps1
+_strings*.ps1
+_ref_extract/
+参考资产/_raw/
+*.extract.txt
+*-decomp*.txt
+rea-*.json
+r-*.json
+
 # ---------- 临时脚本 ----------
 _peek_db.py
 _t.py
