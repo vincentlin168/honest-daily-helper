@@ -1,0 +1,6 @@
+# 诚实日报助手 依赖清单
+# 开发环境：C:/Python313（Python 3.13.2，已装 Pillow + httpx + numpy）
+# 若用其它环境，请先安装这两个依赖
+
+Pillow>=10.0
+httpx>=0.27

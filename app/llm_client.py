@@ -1,0 +1,219 @@
+"""视觉 LLM 识别客户端（Spec-Driven）。
+
+Spec
+----
+把截图发给视觉大模型（DeepSeek-flash 等 OpenAI 兼容接口），让模型理解画面并输出
+「工作内容 + 分类」，这是「诚实日报助手」的核心识别层。
+
+设计要点：
+1. **单一抽象**：任意 OpenAI `/chat/completions` 兼容服务都能接入，换模型只改配置。
+2. **图片 base64 内联**：截图以 `data:image/jpeg;base64,...` 传入，不出本机依赖图床。
+3. **结构化输出**：system prompt 要求模型返回 JSON（content + category），程序直接消费。
+4. **prompt 源自实践**：识别 prompt 为日报导向 + 脱敏设计，已提炼为内置模板。
+   是「日报导向 + 脱敏」的设计。
+5. **错误可诊断**：空内容、纯文本模型（没看到图）给出明确提示。
+
+依赖：httpx。
+"""
+
+import json
+import re
+from typing import Any, Dict, Optional, Tuple
+
+import httpx
+
+# 默认工作方向分类（用户可在设置里自定义）
+DEFAULT_CATEGORIES = [
+    "产品设计", "代码开发", "运营分析", "数据复盘",
+    "客户支持", "项目管理", "日报整理", "资料研究", "其他",
+]
+
+
+def build_system_prompt(categories: Optional[list] = None) -> str:
+    """生成识别 prompt（日报导向 + 脱敏设计，分类列表可动态注入）。"""
+    cats = categories or DEFAULT_CATEGORIES
+    cat_str = "、".join(cats)
+    return f"""根据当前电脑屏幕截图，记录此刻正在进行的工作活动。
+
+核心目标：
+1. 尽可能记录有日报价值的工作内容
+2. 保留工作主题、任务名称、项目方向、需求内容、技术问题、交付物、进展、待办
+3. 保护隐私，脱敏身份信息和敏感字段，工作任务本身要尽量保留
+
+你必须只输出一个 JSON 对象，不要输出任何其他文字，格式如下：
+{{"activity": "简短活动标签", "content": "当前具体工作任务描述", "category": "工作方向分类"}}
+
+其中 activity 是一个**稳定的活动主题标签**（概括当前工作主题，不超过 15 字，
+例如「开发日报助手工具」「撰写项目方案」，不要包含易变的细节动作），
+用于把连续相同的工作聚合成一段。
+
+工作方向分类（category 必须是以下之一）：
+{cat_str}
+
+你应该记录：
+1. 当前正在做的具体工作任务
+2. 当前正在阅读、编辑、核对、调试、整理、沟通的内容主题
+3. 当前任务属于哪个工作方向
+4. 能用于日报的具体进展
+5. 聊天工具里处理工作，只提取工作事项和任务含义，不复述聊天原文
+
+你不应该记录（脱敏要求）：
+1. 不描述桌面壁纸、系统状态栏、时间、电量、天气等无关信息
+2. 不输出联系人昵称、群名、账号名
+3. 不输出手机号、邮箱、身份证、银行卡、地址、验证码、密码、Token、API Key、Cookie
+4. 不输出客户/员工个人身份、薪酬绩效、敏感财务明细
+5. 私人闲聊只输出「当前包含私人沟通内容，已脱敏」"""
+
+
+class LLMClient:
+    """视觉大模型客户端（OpenAI 兼容协议）。"""
+
+    REQUEST_TIMEOUT = 120.0  # 视觉模型延迟高于纯文本，放宽超时
+
+    def __init__(self, api_base: str, api_key: str, model: str,
+                 system_prompt: Optional[str] = None,
+                 categories: Optional[list] = None):
+        self.api_base = (api_base or "").rstrip("/")
+        self.api_key = api_key or ""
+        self.model = model or "deepseek-flash"
+        # 自定义 system_prompt 优先，否则按分类动态生成
+        self.system_prompt = system_prompt or build_system_prompt(categories)
+
+    def _build_messages(self, image_base64: str) -> list:
+        """构造 OpenAI 多模态消息体。图片只能放 user 消息的 content 数组。"""
+        if not image_base64:
+            raise ValueError("截图为空，未发送请求")
+        return [
+            {"role": "system", "content": self.system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "请识别这张截图中的工作内容，输出 JSON。"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}",
+                            "detail": "high",
+                        },
+                    },
+                ],
+            },
+        ]
+
+    def chat_with_image(self, image_base64: str) -> Tuple[str, Dict[str, int]]:
+        """发送截图给模型，返回 (文本结果, usage)。空内容自动重试一次。"""
+        if not image_base64:
+            raise ValueError("截图为空，未发送请求")
+
+        last_error = None
+        for attempt in range(2):  # 空内容时重试一次
+            payload = {
+                "model": self.model,
+                "messages": self._build_messages(image_base64),
+                "temperature": 0.2,
+                "max_tokens": 1024,
+            }
+            try:
+                with httpx.Client(timeout=self.REQUEST_TIMEOUT) as client:
+                    response = client.post(
+                        f"{self.api_base}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                if response.status_code != 200:
+                    raise RuntimeError(f"模型服务返回错误 ({response.status_code}): {response.text[:300]}")
+                data = response.json()
+                text = self._extract_text(data)
+                return text, self._extract_usage(data)
+            except RuntimeError as exc:
+                last_error = exc
+                # 空内容/格式异常可能是偶发，重试一次
+                continue
+        raise last_error if last_error else RuntimeError("模型调用失败")
+
+    # ---------- 解析 ----------
+    @staticmethod
+    def _extract_text(payload: Any) -> str:
+        try:
+            raw = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            raise RuntimeError("模型响应格式异常，未取到内容")
+        if isinstance(raw, list):
+            raw = "".join(item.get("text", "") for item in raw if isinstance(item, dict))
+        if not raw or not raw.strip():
+            raise RuntimeError("模型返回了空内容（可能是纯文本模型无法处理图片，或 Key/额度问题）")
+        return raw
+
+    @staticmethod
+    def _extract_usage(payload: Any) -> Dict[str, int]:
+        usage = payload.get("usage") if isinstance(payload, dict) else None
+        if not isinstance(usage, dict):
+            return {}
+        def pick(*names):
+            for k in names:
+                v = usage.get(k)
+                if isinstance(v, (int, float)):
+                    return int(v)
+            return 0
+        prompt = pick("prompt_tokens", "input_tokens")
+        completion = pick("completion_tokens", "output_tokens")
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": pick("total_tokens") or (prompt + completion),
+        }
+
+    @staticmethod
+    def parse_recognition(text: str) -> Dict[str, str]:
+        """从模型输出中解析 activity + content + category（容错处理各种 JSON 形态）。"""
+        # 剥离可能的 markdown 代码块包裹
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
+        try:
+            obj = json.loads(cleaned)
+        except json.JSONDecodeError:
+            # 尝试从文本中提取第一个 {...}
+            m = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+            if not m:
+                return {"activity": text.strip()[:15], "content": text.strip(), "category": "其他"}
+            try:
+                obj = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                return {"activity": text.strip()[:15], "content": text.strip(), "category": "其他"}
+
+        content = obj.get("content") or obj.get("描述") or ""
+        category = obj.get("category") or obj.get("分类") or "其他"
+        activity = obj.get("activity") or obj.get("活动") or ""
+        if not activity:
+            activity = content[:15]  # fallback：用 content 前 15 字
+        return {
+            "activity": str(activity).strip(),
+            "content": str(content).strip(),
+            "category": str(category).strip(),
+        }
+
+    def test_connection(self) -> Dict[str, Any]:
+        """用纯文本探测消息测试连通性（不消耗图片 token）。"""
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                response = client.post(
+                    f"{self.api_base}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [{"role": "user", "content": "请只回复四个字：连接成功"}],
+                        "max_tokens": 20,
+                    },
+                )
+            if response.status_code == 200:
+                return {"ok": True, "reply": self._extract_text(response.json())}
+            return {"ok": False, "error": f"[{response.status_code}] {response.text[:200]}"}
+        except httpx.TimeoutException:
+            return {"ok": False, "error": "连接超时"}
+        except httpx.RequestError as exc:
+            return {"ok": False, "error": f"连接失败：{exc}"}

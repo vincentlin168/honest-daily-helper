@@ -1,0 +1,32 @@
+{
+  "llm": {
+    "api_base": "https://api.deepseek.com/v1",
+    "api_key": "your-api-key-here",
+    "model": "deepseek-flash",
+    "system_prompt": ""
+  },
+  "capture": {
+    "snap_interval": 15,
+    "interval": 120,
+    "quality": 60,
+    "save_dir": "",
+    "region_preset": "full"
+  },
+  "storage": {
+    "db_path": "records.db"
+  },
+  "report": {
+    "trigger": "both",
+    "scheduled_time": "18:00"
+  },
+  "upload": {
+    "enabled": false,
+    "url": "",
+    "token": ""
+  },
+  "skill_server": {
+    "enabled": true,
+    "port": 8088,
+    "token": ""
+  }
+}

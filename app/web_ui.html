@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>诚实日报助手</title>
+<style>
+  :root {
+    --navy: #1A2A4A;
+    --navy-light: #2A3D63;
+    --gold: #F5A623;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --blue: #3b82f6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6; }
+  .topbar { background: var(--navy); color: #fff; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .topbar h1 { font-size: 18px; font-weight: 600; }
+  .topbar .status { font-size: 12px; color: #cbd5e1; }
+  .topbar .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #34d399; margin-right: 6px; }
+  .nav { background: var(--navy-light); display: flex; padding: 0 24px; }
+  .nav button { background: none; border: none; color: #cbd5e1; padding: 12px 20px; font-size: 14px; cursor: pointer; border-bottom: 2px solid transparent; }
+  .nav button.active { color: #fff; border-bottom-color: var(--gold); font-weight: 600; }
+  .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .card { background: var(--card); border-radius: 10px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .toolbar input[type=date] { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+  .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; background: var(--gold); color: #fff; font-weight: 500; }
+  .btn:hover { opacity: 0.9; }
+  .btn.secondary { background: var(--blue); }
+  .entry { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 10px; }
+  .entry .head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .entry .time { color: var(--muted); font-size: 12px; min-width: 100px; }
+  .entry .activity { font-weight: 600; flex: 1; }
+  .entry .content { color: var(--muted); font-size: 13px; }
+  .cat-tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; background: #eef2ff; color: #4f46e5; }
+  .cat-select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+  .report { white-space: pre-wrap; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .report h1 { font-size: 20px; margin-bottom: 12px; }
+  .report h2 { font-size: 16px; margin: 16px 0 8px; }
+  .report table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  .report th, .report td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; font-size: 13px; }
+  .report th { background: #f9fafb; font-weight: 600; }
+  .report ul { padding-left: 20px; margin: 8px 0; }
+  .report li { margin: 4px 0; }
+  .form-row { margin-bottom: 16px; }
+  .form-row label { display: block; font-weight: 500; margin-bottom: 6px; }
+  .form-row input, .form-row textarea { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+  .form-row textarea { font-family: inherit; resize: vertical; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .empty { text-align: center; color: var(--muted); padding: 40px; }
+  .toast { position: fixed; top: 60px; right: 24px; background: #10b981; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity 0.3s; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>诚实日报助手</h1>
+    <div class="status"><span class="dot"></span>本地运行 · 数据不出本机</div>
+  </div>
+  <div class="nav">
+    <button data-tab="timeline" class="active">时间线</button>
+    <button data-tab="report">日报</button>
+    <button data-tab="settings">设置</button>
+  </div>
+
+  <div class="container">
+    <!-- 时间线 -->
+    <div id="timeline" class="panel active">
+      <div class="card">
+        <div class="toolbar">
+          <input type="date" id="tl-date">
+          <button class="btn secondary" onclick="loadTimeline()">刷新</button>
+        </div>
+        <div id="tl-list"><div class="empty">加载中…</div></div>
+      </div>
+    </div>
+
+    <!-- 日报 -->
+    <div id="report" class="panel">
+      <div class="card">
+        <div class="toolbar">
+          <input type="date" id="rp-date">
+          <button class="btn" onclick="loadReport()">生成日报</button>
+          <button class="btn secondary" onclick="loadReport(true)">AI 分析版</button>
+        </div>
+        <div id="rp-content"><div class="empty">选择日期生成日报</div></div>
+      </div>
+    </div>
+
+    <!-- 设置 -->
+    <div id="settings" class="panel">
+      <div class="card">
+        <h2>截屏设置</h2>
+        <div class="form-row">
+          <label>截屏间隔（秒）</label>
+          <input type="number" id="set-interval" min="10" value="120">
+          <div class="hint">画面不变时会自动跳过识别，不消耗 token，间隔可以设小一些</div>
+        </div>
+        <div class="form-row">
+          <label>区域预设</label>
+          <select id="set-region" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="full">全屏</option>
+            <option value="left_half">左半屏</option>
+            <option value="right_half">右半屏</option>
+            <option value="center">居中 1200x800</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>分类设置</h2>
+        <div class="form-row">
+          <label>工作方向分类（每行一个）</label>
+          <textarea id="set-categories" rows="6">产品设计
+代码开发
+运营分析
+数据复盘
+客户支持
+项目管理
+日报整理
+资料研究
+其他</textarea>
+          <div class="hint">识别时模型会从这些分类中选择；时间线里也可以手动改每条记录的分类</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>模型设置</h2>
+        <div class="form-row">
+          <label>API 地址</label>
+          <input type="text" id="set-api-base" value="https://api.deepseek.com/v1">
+        </div>
+        <div class="form-row">
+          <label>模型名</label>
+          <input type="text" id="set-model" value="deepseek-flash">
+        </div>
+        <div class="form-row">
+          <label>API Key</label>
+          <input type="password" id="set-api-key" placeholder="留空表示不修改">
+          <div class="hint">Key 只保存在本机 config.json，不回显明文</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>日报设置</h2>
+        <div class="form-row">
+          <label>触发方式</label>
+          <select id="set-trigger" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="both">手动 + 定时自动</option>
+            <option value="manual">仅手动</option>
+            <option value="scheduled">仅定时自动</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>定时自动生成时间（HH:MM）</label>
+          <input type="text" id="set-scheduled-time" value="18:00">
+        </div>
+      </div>
+
+      <div class="card">
+        <button class="btn" onclick="saveSettings()" style="width:100%;padding:12px">保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  // 初始化日期
+  function today() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  }
+  document.getElementById('tl-date').value = today();
+  document.getElementById('rp-date').value = today();
+
+  // Tab 切换
+  document.querySelectorAll('.nav button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.tab).classList.add('active');
+      if (btn.dataset.tab === 'settings') loadSettings();
+      if (btn.dataset.tab === 'timeline') loadTimeline();
+    });
+  });
+
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2000);
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+
+  // 时间线
+  async function loadTimeline() {
+    const date = document.getElementById('tl-date').value;
+    const list = document.getElementById('tl-list');
+    try {
+      const r = await fetch('/api/entries?date=' + date);
+      const data = await r.json();
+      if (!data.entries || data.entries.length === 0) {
+        list.innerHTML = '<div class="empty">这一天还没有工作记录</div>';
+        return;
+      }
+      const cats = window._categories || [];
+      list.innerHTML = data.entries.map(e => `
+        <div class="entry">
+          <div class="head">
+            <span class="time">${esc(fmtTime(e.started_at))} - ${esc(fmtTime(e.ended_at))}</span>
+            <span class="activity">${esc(e.activity || e.content || '')}</span>
+            <select class="cat-select" onchange="changeCategory(${e.id}, this.value)">
+              ${cats.map(c => `<option value="${esc(c)}" ${c===e.category?'selected':''}>${esc(c)}</option>`).join('')}
+              ${!cats.includes(e.category) ? `<option value="${esc(e.category)}" selected>${esc(e.category)}</option>` : ''}
+            </select>
+          </div>
+          <div class="content">${esc(e.content)}</div>
+        </div>`).join('');
+    } catch (e) {
+      list.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  function fmtTime(ts) {
+    const d = new Date(ts * 1000);
+    return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  }
+
+  async function changeCategory(id, category) {
+    try {
+      await fetch('/api/entries/' + id + '/category', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({category: category})
+      });
+      toast('分类已更新');
+    } catch (e) { toast('更新失败'); }
+  }
+
+  // 日报
+  async function loadReport(withAI) {
+    const date = document.getElementById('rp-date').value;
+    const box = document.getElementById('rp-content');
+    box.innerHTML = '<div class="empty">生成中…</div>';
+    try {
+      const r = await fetch('/api/report?date=' + date);
+      const data = await r.json();
+      box.innerHTML = '<div class="report">' + renderMarkdown(data.report || '') + '</div>';
+    } catch (e) {
+      box.innerHTML = '<div class="empty">生成失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  function renderMarkdown(md) {
+    let html = esc(md);
+    // 表格
+    html = html.replace(/((?:\|.*\|\n)+)/g, m => {
+      const rows = m.trim().split('\n').filter(l => !/^\|[\s:-]+\|$/.test(l));
+      if (rows.length < 2) return m;
+      let t = '<table>';
+      rows.forEach((row, i) => {
+        const cells = row.split('|').filter((c, idx, arr) => idx > 0 && idx < arr.length - 1);
+        t += '<tr>' + cells.map(c => (i===0?'<th>':'<td>') + c.trim() + (i===0?'</th>':'</td>')).join('') + '</tr>';
+      });
+      return t + '</table>';
+    });
+    // 标题
+    html = html.replace(/^### (.*)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^## (.*)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^# (.*)$/gm, '<h1>$1</h1>');
+    // 列表
+    html = html.replace(/^- (.*)$/gm, '<li>$1</li>');
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    // 粗体
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    // 换行
+    html = html.replace(/\n/g, '<br>');
+    return html;
+  }
+
+  // 设置
+  async function loadSettings() {
+    try {
+      const r = await fetch('/api/settings');
+      const cfg = await r.json();
+      document.getElementById('set-interval').value = cfg.capture?.interval ?? 120;
+      document.getElementById('set-region').value = cfg.capture?.region_preset ?? 'full';
+      document.getElementById('set-api-base').value = cfg.llm?.api_base ?? '';
+      document.getElementById('set-model').value = cfg.llm?.model ?? 'deepseek-flash';
+      document.getElementById('set-trigger').value = cfg.report?.trigger ?? 'both';
+      document.getElementById('set-scheduled-time').value = cfg.report?.scheduled_time ?? '18:00';
+      const cats = cfg.categories || [];
+      document.getElementById('set-categories').value = cats.join('\n');
+      window._categories = cats;
+    } catch (e) { toast('加载设置失败'); }
+  }
+
+  async function saveSettings() {
+    const cats = document.getElementById('set-categories').value.split('\n').map(s => s.trim()).filter(s => s);
+    const body = {
+      capture: {
+        interval: parseInt(document.getElementById('set-interval').value) || 120,
+        region_preset: document.getElementById('set-region').value,
+      },
+      categories: cats,
+      llm: {
+        api_base: document.getElementById('set-api-base').value,
+        model: document.getElementById('set-model').value,
+      },
+      report: {
+        trigger: document.getElementById('set-trigger').value,
+        scheduled_time: document.getElementById('set-scheduled-time').value,
+      }
+    };
+    const key = document.getElementById('set-api-key').value;
+    if (key && !key.includes('...')) body.llm.api_key = key;
+    try {
+      const r = await fetch('/api/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      const res = await r.json();
+      if (res.ok) { toast('设置已保存并生效'); window._categories = cats; }
+      else toast('保存失败');
+    } catch (e) { toast('保存失败'); }
+  }
+
+  // 初始加载
+  loadTimeline();
+  loadSettings();
+</script>
+</body>
+</html>

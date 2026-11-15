@@ -1,0 +1,8 @@
+# 本文件已被项目根目录 .gitignore 取代（保留以兼容单目录使用）
+config.json
+dist/
+*.db
+*.db-journal
+screenshots/
+__pycache__/
+*.pyc
