@@ -32,7 +32,6 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs
 
 import exporter
-from archive import ReportArchive
 from overview import build_overview
 
 
@@ -94,7 +93,6 @@ class SkillHandler(BaseHTTPRequestHandler):
         if date_str:
             return self.store.entries_by_day(date_str)
         # 全部：取最近 90 天
-        from datetime import timedelta
         end = int(datetime.now().timestamp())
         start = end - 90 * 86400
         return self.store.entries_in_range(start, end)
@@ -320,7 +318,6 @@ class SkillHandler(BaseHTTPRequestHandler):
             if content is None:
                 self._send_json({"ok": False, "error": f"不支持的格式: {fmt}"}, status=400)
                 return
-            from pathlib import Path
             root = Path(type(self).export_dir or "exports")
             root.mkdir(parents=True, exist_ok=True)
             stem = date or "全部记录"
