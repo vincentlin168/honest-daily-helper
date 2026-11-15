@@ -93,7 +93,7 @@ class TestUnchangedScreenStillCounts(unittest.TestCase):
         before = self.helper.store.get_entry(eid)["ended_at"]
 
         with patch.object(self.helper, "capture", _FakeCapture([False])):
-            with patch.object(self.helper, "llm") as llm:
+            with patch.object(self.helper, "llm"):
                 self.helper.capture_and_recognize()
 
         after = self.helper.store.get_entry(eid)["ended_at"]
@@ -208,7 +208,6 @@ class TestSummarizeBufferAggregation(unittest.TestCase):
 
         这是「汇总写入周期」参数的核心价值：给聚合留出更多窗口。
         """
-        import aggregate
         base = 1_700_000_000
 
         def run(window):
@@ -244,7 +243,6 @@ class TestExtendCurrentActivity(unittest.TestCase):
 
     def test_respects_max_duration_cap(self):
         """单条记录延��不得超过 MAX_DURATION（4 小时）封顶。"""
-        import time
         from datetime import datetime, timedelta
         import aggregate
         old = int((datetime.now() - timedelta(hours=10)).timestamp())
