@@ -237,12 +237,12 @@
         <div class="form-row">
           <label>抓屏间隔（秒）</label>
           <input type="number" id="set-snap-interval" min="3" max="300" value="15">
-          <div class="hint">每隔这么久抓一次屏并比对像素。这一步不发网络请求、不消耗 token，设小一点也不花钱</div>
+          <div class="hint">每隔这么久抓一次屏并比对像素。这一步不发网络请求、不消耗 token。屏幕像素不变时会跳过识别，但工作时间仍会计入时间线</div>
         </div>
         <div class="form-row">
           <label>汇总写入周期（秒）</label>
           <input type="number" id="set-interval" min="30" max="3600" value="120">
-          <div class="hint">识别结果攒够这个周期后，才聚合成「时间段」写进时间线。周期越长，聚合合并的效果越好</div>
+          <div class="hint">识别结果攒够这个周期后才写进时间线。它主要影响「写入延迟」，对活动段数的影响比想象中小（合并与否取决于活动措辞的相似度）</div>
           <div class="hint" id="interval-effect" style="margin-top:6px;color:#0369a1"></div>
         </div>
         <div class="form-row">
