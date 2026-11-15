@@ -31,7 +31,7 @@ httpx 默认 ``trust_env=True``，会读取 Windows 注册表的 Internet Settin
 依赖：httpx。
 """
 
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 

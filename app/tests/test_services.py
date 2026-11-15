@@ -17,7 +17,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from report import build_report
-from skill_server import SkillHandler, SkillServer
+from skill_server import SkillHandler
 from store import RecordStore
 from upload import ReportUploader
 

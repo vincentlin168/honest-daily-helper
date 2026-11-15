@@ -10,13 +10,11 @@
    （如生成日报）会阻塞其它请求，页面表现为「卡住」。
 """
 
-import json
 import sys
 import tempfile
 import threading
 import time
 import unittest
-from datetime import datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -25,7 +23,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from report import build_report
-from skill_server import SkillHandler, SkillServer
+from skill_server import SkillHandler
 from store import RecordStore
 
 

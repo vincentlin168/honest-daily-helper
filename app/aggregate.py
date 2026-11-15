@@ -15,7 +15,7 @@ Spec
 """
 
 from difflib import SequenceMatcher
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 # 单条活动记录的最大时长（秒），防止一条记录无限延长
 MAX_DURATION = 4 * 3600  # 4 小时
