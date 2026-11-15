@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
 
+from overview import build_overview
+
 
 def _resource_path(name: str) -> Path:
     """资源路径：兼容 PyInstaller 打包（资源在 sys._MEIPASS）。"""
@@ -126,6 +128,29 @@ class SkillHandler(BaseHTTPRequestHandler):
         if path == "/api/settings":
             cfg = type(self).config
             self._send_json(cfg.to_public_dict() if cfg else {})
+            return
+
+        # 概览：今日统计卡片 + 成本透明度
+        if path == "/api/overview":
+            date = (query.get("date") or [datetime.now().strftime("%Y-%m-%d")])[0]
+            entries = self.store.entries_by_day(date) if self.store else []
+            usage = self.store.token_usage_by_day(date) if self.store else {}
+            cfg = type(self).config
+            price_in = float(cfg.get("llm", "price_per_1m_input", default=0) or 0) if cfg else 0.0
+            price_out = float(cfg.get("llm", "price_per_1m_output", default=0) or 0) if cfg else 0.0
+            data = build_overview(entries, usage, price_in, price_out)
+            data["date"] = date
+            self._send_json({"ok": True, **data})
+            return
+
+        # 热力图：最近 N 天 × 24 小时
+        if path == "/api/heatmap":
+            try:
+                days = int((query.get("days") or [7])[0])
+            except (TypeError, ValueError):
+                days = 7
+            grid = self.store.hourly_histogram(days) if self.store else []
+            self._send_json({"ok": True, "days": days, "grid": grid})
             return
 
         self._send_json({"ok": False, "error": f"unknown path: {path}"}, status=404)

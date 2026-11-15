@@ -18,9 +18,11 @@ Spec
 
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from report import distribute_to_hours
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
@@ -139,6 +141,103 @@ class RecordStore:
                 (day_start, day_end),
             ).fetchall()
         return [self._to_dict(r) for r in rows]
+
+    def entries_in_range(self, start_ts: int, end_ts: int) -> List[Dict[str, Any]]:
+        """取时间区间内的记录（按 started_at 过滤，用于多天热力图）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM entries WHERE started_at >= ? AND started_at < ? ORDER BY started_at",
+                (int(start_ts), int(end_ts)),
+            ).fetchall()
+        return [self._to_dict(r) for r in rows]
+
+    # ---------- 热力图 ----------
+    def hourly_histogram(self, days: int = 7) -> List[Dict[str, Any]]:
+        """按「天 × 小时」聚合时长，用于热力图。
+
+        返回形如 ``[{"date": "2026-11-10", "weekday": 0, "hours": [秒, ...24项]}, ...]``
+        每天 24 个槽位，值为该小时内的活动秒数。
+
+        跨小时的活动会按实际落在各小时内的秒数分摊（复用 report.distribute_to_hours），
+        跨天的活动按自然日边界切分。
+        """
+        days = max(1, min(90, int(days)))
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        first_day = today - timedelta(days=days - 1)
+        start_ts = int(first_day.timestamp())
+        end_ts = int((today + timedelta(days=1)).timestamp())
+
+        entries = self.entries_in_range(start_ts, end_ts)
+
+        # date -> [24 个小时的秒数]
+        grid: Dict[str, List[int]] = {}
+        for entry in entries:
+            seg_start = int(entry["started_at"])
+            seg_end = int(entry["ended_at"])
+            if seg_end <= seg_start:
+                continue
+            # 逐自然日切分
+            cursor = seg_start
+            while cursor < seg_end:
+                day = datetime.fromtimestamp(cursor)
+                day_key = day.strftime("%Y-%m-%d")
+                next_midnight = int((day + timedelta(days=1)).replace(
+                    hour=0, minute=0, second=0, microsecond=0).timestamp())
+                slice_end = min(seg_end, next_midnight)
+                hours = grid.setdefault(day_key, [0] * 24)
+                # distribute_to_hours 直接按「一天中的第几小时」(0-23) 累加
+                distribute_to_hours(cursor, slice_end, slice_end - cursor, hours)
+                cursor = slice_end
+
+        result = []
+        for offset in range(days):
+            day = first_day + timedelta(days=offset)
+            key = day.strftime("%Y-%m-%d")
+            result.append({
+                "date": key,
+                "weekday": day.weekday(),   # 0=周一
+                "hours": grid.get(key, [0] * 24),
+            })
+        return result
+
+    # ---------- 成本 ----------
+    def token_usage_by_day(self, date_str: str) -> Dict[str, int]:
+        """某天的 token 用量汇总（含失败调用的消耗）。"""
+        day_start = int(datetime.fromisoformat(date_str).timestamp())
+        day_end = day_start + 86400
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT COALESCE(SUM(input_tokens),0) AS ti,
+                          COALESCE(SUM(output_tokens),0) AS tout,
+                          COUNT(*) AS calls,
+                          COALESCE(SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END),0) AS failures
+                     FROM llm_calls WHERE at >= ? AND at < ?""",
+                (day_start, day_end),
+            ).fetchone()
+        return {
+            "input_tokens": int(row["ti"]),
+            "output_tokens": int(row["tout"]),
+            "total_tokens": int(row["ti"]) + int(row["tout"]),
+            "calls": int(row["calls"]),
+            "failures": int(row["failures"]),
+        }
+
+    def token_usage_range(self, start_ts: int, end_ts: int) -> Dict[str, int]:
+        """时间区间内的 token 用量汇总。"""
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT COALESCE(SUM(input_tokens),0) AS ti,
+                          COALESCE(SUM(output_tokens),0) AS tout,
+                          COUNT(*) AS calls
+                     FROM llm_calls WHERE at >= ? AND at < ?""",
+                (int(start_ts), int(end_ts)),
+            ).fetchone()
+        return {
+            "input_tokens": int(row["ti"]),
+            "output_tokens": int(row["tout"]),
+            "total_tokens": int(row["ti"]) + int(row["tout"]),
+            "calls": int(row["calls"]),
+        }
 
     # ---------- llm_calls ----------
     def insert_llm_call(self, call: Dict[str, Any]) -> None:

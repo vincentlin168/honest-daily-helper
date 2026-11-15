@@ -30,6 +30,35 @@
   .panel.active { display: block; }
   .card { background: var(--card); border-radius: 10px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
   .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+  /* 概览统计卡 */
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .stat { background: #f9fafb; border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .stat .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .stat .value { font-size: 20px; font-weight: 600; color: var(--navy); }
+  .stat .value.small { font-size: 15px; }
+  .stat .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .stat.accent { background: #fffbeb; border-color: #fde68a; }
+  .stat.accent .value { color: #b45309; }
+  /* 热力图 */
+  .heat-wrap { overflow-x: auto; padding-bottom: 4px; }
+  .heat { display: grid; grid-template-columns: 42px repeat(24, minmax(14px, 1fr)); gap: 2px; font-size: 10px; min-width: 420px; }
+  .heat .hd { color: var(--muted); text-align: center; line-height: 1.2; }
+  .heat .dl { color: var(--muted); display: flex; align-items: center; }
+  .heat .cell { aspect-ratio: 1 / 1; border-radius: 2px; background: #f1f5f9; }
+  .heat .cell.l1 { background: #cfe3f7; }
+  .heat .cell.l2 { background: #9ec9ef; }
+  .heat .cell.l3 { background: #5aa5dd; }
+  .heat .cell.l4 { background: #2f7fc1; }
+  .heat .cell.l5 { background: #175a8c; }
+  .heat-legend { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 11px; color: var(--muted); }
+  .heat-legend .cell { width: 14px; height: 14px; border-radius: 2px; }
+  .cat-list { list-style: none; }
+  .cat-list li { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .cat-list li:last-child { border-bottom: none; }
+  .cat-list .bar { flex: 1; height: 8px; background: #f1f5f9; border-radius: 4px; overflow: hidden; }
+  .cat-list .bar i { display: block; height: 100%; background: var(--navy-light); }
+  .cat-list .name { min-width: 90px; }
+  .cat-list .val { min-width: 80px; text-align: right; color: var(--muted); }
   .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
   .toolbar input[type=date] { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
   .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; background: var(--gold); color: #fff; font-weight: 500; }
@@ -66,14 +95,47 @@
     <div class="status"><span class="dot"></span>本地运行 · 数据不出本机</div>
   </div>
   <div class="nav">
-    <button data-tab="timeline" class="active">时间线</button>
+    <button data-tab="overview" class="active">概览</button>
+    <button data-tab="timeline">时间线</button>
     <button data-tab="report">日报</button>
     <button data-tab="settings">设置</button>
   </div>
 
   <div class="container">
+    <!-- 概览 -->
+    <div id="overview" class="panel active">
+      <div class="card">
+        <div class="toolbar">
+          <input type="date" id="ov-date">
+          <button class="btn secondary" onclick="loadOverview()">刷新</button>
+        </div>
+        <div class="stat-grid" id="ov-stats"><div class="empty">加载中…</div></div>
+      </div>
+
+      <div class="card">
+        <h2>工作热力图</h2>
+        <div id="ov-heat"><div class="empty">加载中…</div></div>
+        <div class="heat-legend">
+          <span>少</span>
+          <span class="cell" style="background:#f1f5f9"></span>
+          <span class="cell" style="background:#cfe3f7"></span>
+          <span class="cell" style="background:#9ec9ef"></span>
+          <span class="cell" style="background:#5aa5dd"></span>
+          <span class="cell" style="background:#2f7fc1"></span>
+          <span class="cell" style="background:#175a8c"></span>
+          <span>多</span>
+          <span style="margin-left:8px">每格 = 该小时的活跃时长</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>精力分布</h2>
+        <ul class="cat-list" id="ov-cats"><div class="empty">加载中…</div></ul>
+      </div>
+    </div>
+
     <!-- 时间线 -->
-    <div id="timeline" class="panel active">
+    <div id="timeline" class="panel">
       <div class="card">
         <div class="toolbar">
           <input type="date" id="tl-date">
@@ -160,6 +222,19 @@
       </div>
 
       <div class="card">
+        <h2>成本透明度</h2>
+        <div class="form-row">
+          <label>输入价格（元 / 百万 token）</label>
+          <input type="number" id="set-price-in" min="0" step="0.01" value="0">
+        </div>
+        <div class="form-row">
+          <label>输出价格（元 / 百万 token）</label>
+          <input type="number" id="set-price-out" min="0" step="0.01" value="0">
+        </div>
+        <div class="hint">按你自己模型的实际单价填写，概览页会显示每日真实花费。填 0 则只显示 token 用量，不显示金额 —— 软件不会替你假定价格</div>
+      </div>
+
+      <div class="card">
         <h2>日报设置</h2>
         <div class="form-row">
           <label>触发方式</label>
@@ -191,6 +266,7 @@
   }
   document.getElementById('tl-date').value = today();
   document.getElementById('rp-date').value = today();
+  document.getElementById('ov-date').value = today();
 
   // Tab 切换
   document.querySelectorAll('.nav button').forEach(btn => {
@@ -201,6 +277,7 @@
       document.getElementById(btn.dataset.tab).classList.add('active');
       if (btn.dataset.tab === 'settings') loadSettings();
       if (btn.dataset.tab === 'timeline') loadTimeline();
+      if (btn.dataset.tab === 'overview') { loadOverview(); loadHeatmap(); }
     });
   });
 
@@ -213,6 +290,97 @@
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+
+  // 概览
+  async function loadOverview() {
+    const date = document.getElementById('ov-date').value;
+    const box = document.getElementById('ov-stats');
+    const cats = document.getElementById('ov-cats');
+    try {
+      const r = await fetch('/api/overview?date=' + date);
+      const d = await r.json();
+      if (!d.ok) { box.innerHTML = '<div class="empty">加载失败</div>'; return; }
+
+      const cost = d.cost || {};
+      const costText = cost.has_price
+        ? '¥' + (cost.cost || 0).toFixed(4)
+        : '未设置单价';
+
+      const cards = [
+        { label: '活动段数', value: d.total_segments, sub: d.start_time ? d.start_time + ' - ' + d.end_time : '无记录' },
+        { label: '总时长', value: d.total_duration_text, sub: d.max_gap_text ? '最长空档 ' + d.max_gap_text : '' },
+        { label: '最长连续工作', value: d.longest_continuous_text, sub: d.longest_continuous_count + ' 段相连' },
+        { label: '最活跃时段', value: d.peak_window || '—', sub: d.category_count + ' 个分类' },
+        { label: '识别调用', value: d.llm_calls, sub: d.llm_failures ? d.llm_failures + ' 次失败' : '全部成功' },
+        { label: 'Token 用量', value: (cost.input_tokens + cost.output_tokens).toLocaleString(), sub: '输入 ' + cost.input_tokens + ' / 输出 ' + cost.output_tokens },
+      ];
+
+      box.innerHTML = cards.map(c => `
+        <div class="stat">
+          <div class="label">${esc(c.label)}</div>
+          <div class="value${String(c.value).length > 8 ? ' small' : ''}">${esc(c.value)}</div>
+          ${c.sub ? `<div class="sub">${esc(c.sub)}</div>` : ''}
+        </div>`).join('')
+        + `<div class="stat accent">
+            <div class="label">今日 API 花费</div>
+            <div class="value small">${esc(costText)}</div>
+            <div class="sub">${cost.has_price ? '按你填写的单价换算' : '在设置里填写模型单价后显示'}</div>
+          </div>`;
+
+      // 精力分布
+      const top = d.top_categories || [];
+      if (!top.length) {
+        cats.innerHTML = '<div class="empty">这一天还没有工作记录</div>';
+      } else {
+        const max = Math.max(...top.map(t => t.duration)) || 1;
+        cats.innerHTML = top.map(t => `
+          <li>
+            <span class="name">${esc(t.name)}</span>
+            <span class="bar"><i style="width:${Math.round(t.duration / max * 100)}%"></i></span>
+            <span class="val">${esc(t.text)}</span>
+          </li>`).join('');
+      }
+    } catch (e) {
+      box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  // 热力图
+  async function loadHeatmap() {
+    const box = document.getElementById('ov-heat');
+    try {
+      const r = await fetch('/api/heatmap?days=7');
+      const d = await r.json();
+      if (!d.ok || !d.grid || !d.grid.length) { box.innerHTML = '<div class="empty">暂无数据</div>'; return; }
+
+      const WD = ['一', '二', '三', '四', '五', '六', '日'];
+      let html = '<div class="heat-wrap"><div class="heat">';
+      html += '<div class="hd"></div>';
+      for (let h = 0; h < 24; h++) {
+        html += '<div class="hd">' + (h % 3 === 0 ? h : '') + '</div>';
+      }
+      for (const row of d.grid) {
+        html += '<div class="dl">' + WD[row.weekday] + '</div>';
+        for (const secs of row.hours) {
+          html += '<div class="cell ' + heatLevel(secs) + '" title="' + row.date + ' ' + (secs/60).toFixed(0) + ' 分钟"></div>';
+        }
+      }
+      html += '</div></div>';
+      box.innerHTML = html;
+    } catch (e) {
+      box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  function heatLevel(secs) {
+    if (!secs) return '';
+    const mins = secs / 60;
+    if (mins >= 45) return 'l5';
+    if (mins >= 30) return 'l4';
+    if (mins >= 20) return 'l3';
+    if (mins >= 10) return 'l2';
+    return 'l1';
   }
 
   // 时间线
@@ -311,6 +479,8 @@
       document.getElementById('set-region').value = cfg.capture?.region_preset ?? 'full';
       document.getElementById('set-api-base').value = cfg.llm?.api_base ?? '';
       document.getElementById('set-model').value = cfg.llm?.model ?? 'deepseek-flash';
+      document.getElementById('set-price-in').value = cfg.llm?.price_per_1m_input ?? 0;
+      document.getElementById('set-price-out').value = cfg.llm?.price_per_1m_output ?? 0;
       document.getElementById('set-trigger').value = cfg.report?.trigger ?? 'both';
       document.getElementById('set-scheduled-time').value = cfg.report?.scheduled_time ?? '18:00';
       const cats = cfg.categories || [];
@@ -355,6 +525,8 @@
       llm: {
         api_base: document.getElementById('set-api-base').value,
         model: document.getElementById('set-model').value,
+        price_per_1m_input: parseFloat(document.getElementById('set-price-in').value) || 0,
+        price_per_1m_output: parseFloat(document.getElementById('set-price-out').value) || 0,
       },
       report: {
         trigger: document.getElementById('set-trigger').value,
@@ -377,6 +549,8 @@
   }
 
   // 初始加载
+  loadOverview();
+  loadHeatmap();
   loadTimeline();
   loadSettings();
 </script>
