@@ -3,7 +3,6 @@
 覆盖点：上报器配置/头构造/未配置保护；Skill 服务鉴权与路由。
 """
 
-import json
 import sys
 import tempfile
 import threading
