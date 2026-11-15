@@ -37,7 +37,7 @@ jobs:
       - name: 导入冒烟测试
         working-directory: app
         run: |
-          python -c "import aggregate, capture, config, http_client, llm_client, logging_setup, main, overview, report, skill_server, store, upload; print('all modules import OK')"
+          python -c "import aggregate, archive, capture, config, exporter, http_client, llm_client, logging_setup, main, overview, report, skill_server, store, upload; print('all modules import OK')"
 
   lint:
     name: 静态检查
