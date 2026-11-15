@@ -13,10 +13,11 @@ Spec
 
 配置结构（与 DEFAULTS 对齐）：
     llm:            api_base / api_key / model / system_prompt
-    capture:        interval / quality / save_dir / region_preset
+                    use_system_proxy / price_per_1m_input / price_per_1m_output
+    capture:        snap_interval / interval / quality / save_dir / region_preset
     storage:        db_path
     report:         trigger(manual|scheduled|both) / scheduled_time
-    upload:         enabled / url / token
+    upload:         enabled / url / token / use_system_proxy
     skill_server:   enabled / port / token
 """
 
@@ -33,6 +34,10 @@ DEFAULTS: Dict[str, Any] = {
         "api_key": "",
         "model": "deepseek-flash",  # 用户拍板：默认 DeepSeek-flash（免费档，视觉可用）
         "system_prompt": "",         # 留空则用 llm_client 内置识别 prompt
+        "use_system_proxy": False,   # 默认直连官方，不被系统代理静默改道
+        # 价格（每百万 token），用于成本透明度展示；填 0 则不显示金额
+        "price_per_1m_input": 0.0,
+        "price_per_1m_output": 0.0,
     },
     "capture": {
         "snap_interval": 15,         # 抓屏间隔（秒，密集抓，不漏记）
@@ -52,6 +57,7 @@ DEFAULTS: Dict[str, Any] = {
         "enabled": False,            # 数据上报（默认关，仅推用户自己的服务端）
         "url": "",
         "token": "",
+        "use_system_proxy": False,   # 默认直连，不被系统代理静默改道
     },
     "skill_server": {
         "enabled": True,             # Skill 本地服务（首版要做）

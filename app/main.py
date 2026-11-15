@@ -35,11 +35,15 @@ for _stream in (sys.stdout, sys.stderr):
 import aggregate
 from capture import Capture
 from config import Config
+from http_client import make_client
+from logging_setup import get_logger
 from llm_client import LLMClient
 from report import build_report, build_ai_prompt
 from skill_server import SkillServer
 from store import RecordStore
 from upload import ReportUploader
+
+log = get_logger()
 
 
 class DailyHelper:
@@ -72,12 +76,14 @@ class DailyHelper:
             model=llm_cfg.get("model", "deepseek-flash"),
             system_prompt=llm_cfg.get("system_prompt") or None,
             categories=self.config.get("categories"),
+            use_system_proxy=bool(llm_cfg.get("use_system_proxy", False)),
         )
 
         up_cfg = self.config.get("upload", default={})
         self.uploader = ReportUploader(
             url=up_cfg.get("url", ""),
             token=up_cfg.get("token", ""),
+            use_system_proxy=bool(up_cfg.get("use_system_proxy", False)),
         )
 
     def _reload_settings(self) -> None:
@@ -206,10 +212,12 @@ class DailyHelper:
             stats = aggregate_stats(entries)
             prompt = build_ai_prompt(stats, entries)
             try:
-                # 纯文本调用（复用 llm_client 的 OpenAI 兼容路径，简化用 httpx）
-                import httpx
+                # 纯文本调用（复用 llm_client 的 OpenAI 兼容路径）
+                # trust_env=False：直连官方 API，不被系统代理静默改道
                 llm_cfg = self.config.llm_config
-                with httpx.Client(timeout=120) as client:
+                with make_client(timeout=120,
+                                 use_system_proxy=self.config.get(
+                                     "llm", "use_system_proxy", default=False)) as client:
                     resp = client.post(
                         f"{llm_cfg.get('api_base','').rstrip('/')}/chat/completions",
                         headers={"Authorization": f"Bearer {llm_cfg.get('api_key','')}",
@@ -223,7 +231,10 @@ class DailyHelper:
                     )
                 if resp.status_code == 200:
                     ai_analysis = resp.json()["choices"][0]["message"]["content"]
-            except Exception:
+                else:
+                    print(f"[日报 AI 分析失败] HTTP {resp.status_code}: {resp.text[:200]}")
+            except Exception as exc:
+                print(f"[日报 AI 分析失败] {exc}")
                 ai_analysis = None  # AI 失败回退纯模板
 
         report_md = build_report(entries, date, ai_analysis=ai_analysis)
@@ -247,12 +258,17 @@ class DailyHelper:
                 report_builder=build_report,
                 config=self.config,
                 settings_callback=self._reload_settings,
+                llm_tester=self.llm.test_connection,
             )
             threading.Thread(target=server.run, daemon=True).start()
 
         # 三层架构循环：密集抓屏 → 变化识别 → 定期聚合
-        print("诚实日报助手已启动")
-        print(f"Web 界面: http://127.0.0.1:{skill_cfg.get('port', 8088)}")
+        log.info("诚实日报助手已启动")
+        log.info("Web 界面: http://127.0.0.1:%s", skill_cfg.get('port', 8088))
+        log.info("抓屏间隔 %ss / 汇总周期 %ss / 模型 %s",
+                 self.config.get("capture", "snap_interval", default=15),
+                 self.config.get("capture", "interval", default=120),
+                 self.config.get("llm", "model", default="deepseek-flash"))
 
         buffer = []           # 攒本汇总周期内的识别结果
         last_summary = time.time()
@@ -266,19 +282,21 @@ class DailyHelper:
                 rec = self.capture_and_recognize()
                 if rec is not None:
                     if "_error" in rec:
-                        print(f"[识别失败] {rec['_error']}")
+                        log.error("[识别失败] %s", rec['_error'])
                     else:
                         buffer.append(rec)
-                        print(f"[识别 {len(buffer)}] {rec['content'][:60]}（{rec['category']}）")
+                        log.info("[识别 %d] %s（%s）", len(buffer),
+                                 rec['content'][:60], rec['category'])
                 # 画面没变则静默跳过
             except Exception as exc:
-                print(f"[循环异常] {exc}")
+                log.exception("[循环异常] %s", exc)
 
             # 第二层：到汇总周期，把 buffer 聚合成活动段写入
             if time.time() - last_summary >= summary_interval:
                 if buffer:
                     stat = self.summarize_buffer(buffer)
-                    print(f"[汇总] 本周期识别 {stat['recognized']} 次 → 新建 {stat['created']} 段 / 合并 {stat['merged']} 段")
+                    log.info("[汇总] 本周期识别 %d 次 → 新建 %d 段 / 合并 %d 段",
+                             stat['recognized'], stat['created'], stat['merged'])
                 buffer = []
                 last_summary = time.time()
 
@@ -307,13 +325,13 @@ class DailyHelper:
         try:
             report_md = self.generate_report()
             self._last_report_date = today
-            print(f"\n===== 工作日报 =====\n{report_md}\n")
+            log.info("===== 工作日报 =====\n%s", report_md)
         except Exception as exc:
-            print(f"[日报生成失败] {exc}")
+            log.exception("[日报生成失败] %s", exc)
 
 
 def main():
-    import sys
+    import copy
     import json
     from pathlib import Path
 
@@ -324,17 +342,12 @@ def main():
         example = Path(__file__).parent / "config.example.json"
         if example.exists():
             default = json.loads(example.read_text(encoding="utf-8"))
-            config_path.write_text(json.dumps(default, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"已生成默认配置 {config_path}，请填入 API Key 后重新运行")
         else:
-            config_path.write_text(json.dumps({
-                "llm": {"api_base": "https://api.deepseek.com/v1", "api_key": "", "model": "deepseek-flash"},
-                "capture": {"interval": 120, "quality": 60, "save_dir": "", "region_preset": "full"},
-                "storage": {"db_path": "records.db"},
-                "report": {"trigger": "both", "scheduled_time": "18:00"},
-                "upload": {"enabled": False, "url": "", "token": ""},
-                "skill_server": {"enabled": True, "port": 8088, "token": ""},
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            # 兜底：用 config.DEFAULTS（单一事实来源，避免两处默认值漂移）
+            from config import DEFAULTS
+            default = copy.deepcopy(DEFAULTS)
+        config_path.write_text(json.dumps(default, ensure_ascii=False, indent=2), encoding="utf-8")
+        log.info("已生成默认配置 %s，请填入 API Key 后重新运行", config_path)
 
     helper = DailyHelper(str(config_path))
     helper.start()

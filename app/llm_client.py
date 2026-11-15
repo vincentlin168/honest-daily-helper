@@ -22,6 +22,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
+from http_client import make_client
+
 # 默认工作方向分类（用户可在设置里自定义）
 DEFAULT_CATEGORIES = [
     "产品设计", "代码开发", "运营分析", "数据复盘",
@@ -72,10 +74,12 @@ class LLMClient:
 
     def __init__(self, api_base: str, api_key: str, model: str,
                  system_prompt: Optional[str] = None,
-                 categories: Optional[list] = None):
+                 categories: Optional[list] = None,
+                 use_system_proxy: bool = False):
         self.api_base = (api_base or "").rstrip("/")
         self.api_key = api_key or ""
         self.model = model or "deepseek-flash"
+        self.use_system_proxy = bool(use_system_proxy)
         # 自定义 system_prompt 优先，否则按分类动态生成
         self.system_prompt = system_prompt or build_system_prompt(categories)
 
@@ -114,7 +118,8 @@ class LLMClient:
                 "max_tokens": 1024,
             }
             try:
-                with httpx.Client(timeout=self.REQUEST_TIMEOUT) as client:
+                with make_client(timeout=self.REQUEST_TIMEOUT,
+                                 use_system_proxy=self.use_system_proxy) as client:
                     response = client.post(
                         f"{self.api_base}/chat/completions",
                         headers={
@@ -315,9 +320,14 @@ class LLMClient:
         }
 
     def test_connection(self) -> Dict[str, Any]:
-        """用纯文本探测消息测试连通性（不消耗图片 token）。"""
+        """用纯文本探测消息测试连通性（不消耗图片 token）。
+
+        注意：``max_tokens`` 必须给足。有些模型（如 deepseek-flash）会先输出
+        ``reasoning_content``（思维链），若预算太小会被思维链吃光，导致
+        ``content`` 为空、``finish_reason='length'`` —— 被误判成「连接失败」。
+        """
         try:
-            with httpx.Client(timeout=15.0) as client:
+            with make_client(timeout=15.0, use_system_proxy=self.use_system_proxy) as client:
                 response = client.post(
                     f"{self.api_base}/chat/completions",
                     headers={
@@ -327,13 +337,35 @@ class LLMClient:
                     json={
                         "model": self.model,
                         "messages": [{"role": "user", "content": "请只回复四个字：连接成功"}],
-                        "max_tokens": 20,
+                        "max_tokens": 512,
                     },
                 )
             if response.status_code == 200:
-                return {"ok": True, "reply": self._extract_text(response.json())}
+                payload = response.json()
+                text = self._extract_reply(payload)
+                if text:
+                    return {"ok": True, "reply": text}
+                return {"ok": False, "error": "模型返回空内容（可能被 max_tokens 截断，可调大后重试）"}
             return {"ok": False, "error": f"[{response.status_code}] {response.text[:200]}"}
         except httpx.TimeoutException:
             return {"ok": False, "error": "连接超时"}
         except httpx.RequestError as exc:
             return {"ok": False, "error": f"连接失败：{exc}"}
+
+    @staticmethod
+    def _extract_reply(payload: Any) -> str:
+        """从响应里取出可读文本。
+
+        优先 ``content``；若为空则回退 ``reasoning_content``（推理模型的思维链）。
+        """
+        try:
+            message = payload["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError):
+            return ""
+        for field in ("content", "reasoning_content"):
+            raw = message.get(field)
+            if isinstance(raw, list):
+                raw = "".join(item.get("text", "") for item in raw if isinstance(item, dict))
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+        return ""

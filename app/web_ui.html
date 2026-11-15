@@ -100,9 +100,14 @@
       <div class="card">
         <h2>截屏设置</h2>
         <div class="form-row">
-          <label>截屏间隔（秒）</label>
-          <input type="number" id="set-interval" min="10" value="120">
-          <div class="hint">画面不变时会自动跳过识别，不消耗 token，间隔可以设小一些</div>
+          <label>抓屏间隔（秒）</label>
+          <input type="number" id="set-snap-interval" min="3" max="300" value="15">
+          <div class="hint">每隔这么久抓一次屏并比对像素。这一步不发网络请求、不消耗 token，设小一点也不花钱</div>
+        </div>
+        <div class="form-row">
+          <label>汇总写入周期（秒）</label>
+          <input type="number" id="set-interval" min="30" max="3600" value="120">
+          <div class="hint">识别结果攒够这个周期后，才聚合成「时间段」写进时间线。周期越长，聚合合并的效果越好</div>
         </div>
         <div class="form-row">
           <label>区域预设</label>
@@ -112,6 +117,7 @@
             <option value="right_half">右半屏</option>
             <option value="center">居中 1200x800</option>
           </select>
+          <div class="hint">只截部分屏幕能降低图片体积与识别噪音，也更省 token</div>
         </div>
       </div>
 
@@ -146,6 +152,10 @@
           <label>API Key</label>
           <input type="password" id="set-api-key" placeholder="留空表示不修改">
           <div class="hint">Key 只保存在本机 config.json，不回显明文</div>
+        </div>
+        <div class="form-row">
+          <button class="btn secondary" id="btn-test-llm" onclick="testLLM()">测试连接</button>
+          <div class="hint" id="llm-test-result">验证 Key、模型名与网络是否可用（用纯文本请求，不消耗图片 token）</div>
         </div>
       </div>
 
@@ -296,6 +306,7 @@
     try {
       const r = await fetch('/api/settings');
       const cfg = await r.json();
+      document.getElementById('set-snap-interval').value = cfg.capture?.snap_interval ?? 15;
       document.getElementById('set-interval').value = cfg.capture?.interval ?? 120;
       document.getElementById('set-region').value = cfg.capture?.region_preset ?? 'full';
       document.getElementById('set-api-base').value = cfg.llm?.api_base ?? '';
@@ -308,10 +319,35 @@
     } catch (e) { toast('加载设置失败'); }
   }
 
-  async function saveSettings() {
+  async function testLLM() {
+    const btn = document.getElementById('btn-test-llm');
+    const out = document.getElementById('llm-test-result');
+    btn.disabled = true;
+    btn.textContent = '测试中…';
+    out.textContent = '正在测试…';
+    try {
+      // 先保存当前设置（含 Key），再用真实配置测试
+      await saveSettings(true);
+      const r = await fetch('/api/llm/test', { method: 'POST' });
+      const res = await r.json();
+      if (res.ok) {
+        out.innerHTML = '<span style="color:#059669">连接成功</span> · 模型回复：' + esc(res.reply || '');
+      } else {
+        out.innerHTML = '<span style="color:#dc2626">连接失败</span> · ' + esc(res.error || '未知错误');
+      }
+    } catch (e) {
+      out.innerHTML = '<span style="color:#dc2626">连接失败</span> · ' + esc(e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '测试连接';
+    }
+  }
+
+  async function saveSettings(silent) {
     const cats = document.getElementById('set-categories').value.split('\n').map(s => s.trim()).filter(s => s);
     const body = {
       capture: {
+        snap_interval: parseInt(document.getElementById('set-snap-interval').value) || 15,
         interval: parseInt(document.getElementById('set-interval').value) || 120,
         region_preset: document.getElementById('set-region').value,
       },
@@ -334,9 +370,10 @@
         body: JSON.stringify(body)
       });
       const res = await r.json();
-      if (res.ok) { toast('设置已保存并生效'); window._categories = cats; }
-      else toast('保存失败');
-    } catch (e) { toast('保存失败'); }
+      if (res.ok) { window._categories = cats; if (!silent) toast('设置已保存并生效'); }
+      else if (!silent) toast('保存失败');
+      return res.ok;
+    } catch (e) { if (!silent) toast('保存失败'); return false; }
   }
 
   // 初始加载

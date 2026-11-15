@@ -46,3 +46,7 @@ r-*.json
 # ---------- 临时脚本 ----------
 _peek_db.py
 _t.py
+
+# ---------- 运行日志 ----------
+honest-helper.log
+honest-helper.log.1

@@ -19,12 +19,14 @@ Spec
 1. 零依赖（标准库 http.server），只监听 127.0.0.1。
 2. 可选 Bearer Token 鉴权。
 3. 设置更新通过 settings_callback 回调，让主程序热更新模块。
+4. **多线程处理**（ThreadingHTTPServer）：Web UI 切页签时会并发请求，
+   单线程 HTTPServer 会让慢请求（如生成日报）阻塞其它请求，页面表现为「卡住」。
 """
 
 import json
 import sys
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
@@ -46,6 +48,7 @@ class SkillHandler(BaseHTTPRequestHandler):
     report_builder = None     # build_report 函数
     config = None             # Config 实例
     settings_callback = None  # 设置更新后的回调（热更新模块）
+    llm_tester = None         # 连通性测试回调（返回 {ok, reply|error}）
 
     def _authorized(self) -> bool:
         if not self.token:
@@ -128,12 +131,24 @@ class SkillHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": False, "error": f"unknown path: {path}"}, status=404)
 
     # ---------- POST ----------
-    def do_POST(self):
+    def     do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
 
         if not self._authorized():
             self._send_json({"ok": False, "error": "unauthorized"}, status=401)
+            return
+
+        # 连通性测试：/api/llm/test —— 验证 API Key / 模型 / 网络是否可用
+        if path == "/api/llm/test":
+            tester = type(self).llm_tester
+            if tester is None:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            try:
+                self._send_json(tester())
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=200)
             return
 
         # 手动改分类：/api/entries/{id}/category
@@ -180,7 +195,8 @@ class SkillServer:
     """Skill 本地服务。"""
 
     def __init__(self, store, token: str = "", port: int = 8088,
-                 report_builder=None, config=None, settings_callback=None):
+                 report_builder=None, config=None, settings_callback=None,
+                 llm_tester=None):
         self.store = store
         self.port = port
         SkillHandler.store = store
@@ -188,8 +204,11 @@ class SkillServer:
         SkillHandler.report_builder = report_builder
         SkillHandler.config = config
         SkillHandler.settings_callback = settings_callback
+        SkillHandler.llm_tester = llm_tester
 
     def run(self):
-        server = HTTPServer(("127.0.0.1", self.port), SkillHandler)
+        # daemon_threads=True：请求线程随主进程退出，避免关不掉
+        server = ThreadingHTTPServer(("127.0.0.1", self.port), SkillHandler)
+        server.daemon_threads = True
         print(f"Skill 服务已启动: http://127.0.0.1:{self.port}")
         server.serve_forever()
