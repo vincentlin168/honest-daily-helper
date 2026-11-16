@@ -1,6 +1,8 @@
 # ---------- 敏感配置（含 API Key / Token，勿提交） ----------
 config.json
+config.json.bak
 app/config.json
+app/config.json.bak
 app/dist/
 *.db
 *.db-journal
@@ -54,6 +56,8 @@ _t.py
 # ---------- 运行日志 ----------
 honest-helper.log
 honest-helper.log.1
+stdout.log
+stderr.log
 
 # ---------- 运行时产物（用户数据，不属于源码） ----------
 # 日报留档目录（每日生成的 Markdown）

@@ -8,12 +8,15 @@ Spec
 1. **零额外依赖**：用标准库 json，不引入 yaml/toml，保持"开箱即跑"。
 2. **默认值内置**：配置文件缺失时用 DEFAULTS，保证 clone 下来不填任何东西也能跑。
 3. **密钥永不明文回显**：`to_public_dict()` 是唯一允许暴露给外部（HTTP/日志）的出口，
-   会把 api_key / token 掩码成 `sk-a...wxyz` 形式。
+   会把 api_key / token / api_password 掩码成 `sk-a...wxyz` 形式。
 4. **点路径读取**：`get("llm", "model")` 风格，缺失时返回 default。
+5. **掩码值不得回写**：前端回传掩码形态的密钥时，`update_from_dict()`
+   必须识别并忽略它，否则「读一次设置就把真密钥冲成掩码」。
 
 配置结构（与 DEFAULTS 对齐）：
     llm:            api_base / api_key / model / system_prompt
-                    use_system_proxy / price_per_1m_input / price_per_1m_output
+                    use_system_proxy / auth_type / api_username / api_password
+                    price_per_1m_input / price_per_1m_output
     capture:        snap_interval / interval / quality / save_dir / region_preset
     storage:        db_path / archive_dir / export_dir
     report:         trigger(manual|scheduled|both) / scheduled_time
@@ -26,6 +29,7 @@ import json
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 PLACEHOLDER_KEY = "your-api-key-here"
 
@@ -36,6 +40,12 @@ DEFAULTS: Dict[str, Any] = {
         "model": "deepseek-flash",  # 用户拍板：默认 DeepSeek-flash（免费档，视觉可用）
         "system_prompt": "",         # 留空则用 llm_client 内置识别 prompt
         "use_system_proxy": False,   # 默认直连官方，不被系统代理静默改道
+        # 认证方式：""=自动 / bearer / basic / none
+        # 自动判定：有 user:pass@ 内嵌在 URL 里 -> basic，否则 -> bearer
+        "auth_type": "",
+        # basic 认证用的用户名/密码（也可用 URL 内嵌的 user:pass@ 代替）
+        "api_username": "",
+        "api_password": "",
         # 价格（每百万 token），用于成本透明度展示；填 0 则不显示金额
         "price_per_1m_input": 0.0,
         "price_per_1m_output": 0.0,
@@ -95,6 +105,33 @@ def mask_secret(value: Optional[str], keep: int = 4) -> str:
     if len(value) <= keep * 2:
         return "*" * len(value)
     return f"{value[:keep]}...{value[-keep:]}"
+
+
+def _mask_url_credentials(url: str) -> str:
+    """把 URL 里内嵌的 ``user:pass@`` 掩码掉密码部分。
+
+    用户可能把凭据直接写在 API 地址里（``https://user:pass@host/v1``）。
+    这属于密钥，回显给浏览器时必须掩码，否则密码会明文出现在
+    ``/api/settings`` 的响应里（也就会被页面 DOM / 开发者工具看到）。
+
+    只掩码密码，用户名保留 —— 用户需要靠它确认「填的是哪个账号」。
+    """
+    if not url or "@" not in url:
+        return url
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if "@" not in parts.netloc:
+        return url
+    userinfo, _, hostport = parts.netloc.rpartition("@")
+    username, sep, password = userinfo.partition(":")
+    if not sep or not password:
+        return url
+    masked_pwd = mask_secret(password)
+    clean = urlunsplit((parts.scheme, f"{username}:{masked_pwd}@{hostport}",
+                        parts.path, parts.query, parts.fragment))
+    return clean
 
 
 class Config:
@@ -185,12 +222,74 @@ class Config:
                 merged = dict(self._data[key])
                 merged.update(value)
                 # 掩码形态的 api_key/token 不应覆盖真实值
-                for secret in ("api_key", "token"):
+                for secret in ("api_key", "token", "api_password"):
                     if secret in merged and isinstance(merged[secret], str) and "..." in merged[secret]:
                         merged[secret] = self._data[key].get(secret, "")
+                # api_base 里内嵌的密码同理：前端回显的是掩码形态
+                # （如 https://user:s3...ret@host），直接写回会把真密码冲成掩码。
+                if key == "llm" and isinstance(merged.get("api_base"), str):
+                    merged["api_base"] = self._merge_url_credentials(
+                        merged["api_base"], self._data.get("llm", {}).get("api_base", ""))
                 self._data[key] = merged
             else:
                 self._data[key] = value
+
+    @staticmethod
+    def _is_masked_pwd(pwd: str) -> bool:
+        """判断密码是否是掩码形态。
+
+        ``mask_secret`` 有两种输出：
+        * 长密码（> 2*keep）-> ``s3...ret``，含 ``...``
+        * 短密码（<= 2*keep）-> 全星号 ``******``，**不含** ``...``
+
+        所以判定掩码不能只看 ``...``，否则短密码会被当成「用户新填的密码」
+        写回配置，把真密码冲掉。
+        """
+        if not pwd:
+            return False
+        if "..." in pwd:
+            return True
+        return set(pwd) == {"*"} and len(pwd) > 0
+
+    @classmethod
+    def _merge_url_credentials(cls, new_base: str, old_base: str) -> str:
+        """合并 URL 内嵌凭据：密码部分以**旧值**为准。
+
+        前端从 ``/api/settings`` 拿到的是掩码后的地址
+        （如 ``https://user:******@host/v1``）。用户若没改地址就保存，
+        回写的掩码密码会把真密码冲掉 —— 之后 Basic 认证直接失败。
+
+        判定：新地址里的密码是掩码形态，而旧地址里不是
+        -> 说明用户没动地址，保留旧密码；否则以新地址为准。
+        """
+        if not new_base or "@" not in new_base:
+            return new_base
+        try:
+            new_parts = urlsplit(new_base)
+            old_parts = urlsplit(old_base or "")
+        except ValueError:
+            return new_base
+
+        def split_creds(parts):
+            if "@" not in parts.netloc:
+                return None, None
+            userinfo, _, hostport = parts.netloc.rpartition("@")
+            username, sep, password = userinfo.partition(":")
+            return (username, password) if sep else (None, None)
+
+        new_user, new_pwd = split_creds(new_parts)
+        if new_pwd is None or not cls._is_masked_pwd(new_pwd):
+            return new_base
+
+        old_user, old_pwd = split_creds(old_parts)
+        if old_pwd is None or cls._is_masked_pwd(old_pwd):
+            return new_base  # 旧值也没有真密码，无从恢复
+
+        # 沿用旧密码，保留新地址的其余部分
+        rebuilt = urlunsplit((new_parts.scheme,
+                              f"{new_user or old_user}:{old_pwd}@{new_parts.netloc.rpartition('@')[2]}",
+                              new_parts.path, new_parts.query, new_parts.fragment))
+        return rebuilt
 
     # ---------- 派生视图 ----------
     @property
@@ -215,4 +314,10 @@ class Config:
             safe["upload"]["token"] = mask_secret(safe["upload"].get("token"))
         if "skill_server" in safe and "token" in safe["skill_server"]:
             safe["skill_server"]["token"] = mask_secret(safe["skill_server"].get("token"))
+        if "llm" in safe and "api_password" in safe["llm"]:
+            safe["llm"]["api_password"] = mask_secret(safe["llm"].get("api_password"))
+        # URL 里内嵌的凭据（https://user:pass@host/v1）同样属于密钥，
+        # 回显时必须一并掩码，否则密码会随 /api/settings 明文返回给浏览器。
+        if "llm" in safe and safe["llm"].get("api_base"):
+            safe["llm"]["api_base"] = _mask_url_credentials(safe["llm"]["api_base"])
         return safe

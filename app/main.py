@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 # 让 print 实时输出（重定向到管道/文件时默认块缓冲，会导致看不到实时识别结果）
 for _stream in (sys.stdout, sys.stderr):
@@ -37,7 +37,6 @@ import aggregate
 from archive import ReportArchive
 from capture import Capture
 from config import Config
-from http_client import make_client
 from logging_setup import get_logger
 from llm_client import LLMClient
 from onboarding import Onboarding
@@ -87,6 +86,9 @@ class DailyHelper:
             system_prompt=llm_cfg.get("system_prompt") or None,
             categories=self.config.get("categories"),
             use_system_proxy=bool(llm_cfg.get("use_system_proxy", False)),
+            auth_type=llm_cfg.get("auth_type", "") or "",
+            api_username=llm_cfg.get("api_username", "") or "",
+            api_password=llm_cfg.get("api_password", "") or "",
         )
 
         up_cfg = self.config.get("upload", default={})
@@ -117,6 +119,26 @@ class DailyHelper:
     def _reload_settings(self) -> None:
         """设置更新后重建 capture/llm/uploader（不重建 store）。"""
         self._init_capture_llm()
+
+    def _make_llm_tester(self) -> Callable[[], Dict[str, Any]]:
+        """构造「连通性测试」回调。
+
+        必须返回一个**每次调用都取当前实例**的可调用对象，而不是直接绑定
+        ``self.llm.test_connection``。
+
+        为什么
+        ------
+        直接绑定绑定方法会把「服务启动那一刻」的 LLMClient 实例写死。
+        用户在设置页改掉 api_key / api_base 后：
+
+        * 识别循环走 ``self.llm``（已被 ``_reload_settings()`` 重建）-> 用新凭据，正常
+        * 「测试连接」走旧实例 -> 用旧凭据，报 401
+
+        表现为**假阴性**：Key 明明改对了，测试连接却仍说连不上，
+        用户只能靠重启进程解决。lambda 每次求值都读当前的 ``self.llm``，
+        因此凭据热更新后测试连接立即反映真实状态。
+        """
+        return lambda: self.llm.test_connection()
 
     # ---------- 密集抓屏三层架构 ----------
     def capture_and_recognize(self) -> Optional[Dict[str, Any]]:
@@ -296,26 +318,8 @@ class DailyHelper:
             prompt = build_ai_prompt(stats, entries)
             try:
                 # 纯文本调用（复用 llm_client 的 OpenAI 兼容路径）
-                # trust_env=False：直连官方 API，不被系统代理静默改道
-                llm_cfg = self.config.llm_config
-                with make_client(timeout=120,
-                                 use_system_proxy=self.config.get(
-                                     "llm", "use_system_proxy", default=False)) as client:
-                    resp = client.post(
-                        f"{llm_cfg.get('api_base','').rstrip('/')}/chat/completions",
-                        headers={"Authorization": f"Bearer {llm_cfg.get('api_key','')}",
-                                 "Content-Type": "application/json"},
-                        json={
-                            "model": llm_cfg.get("model", "deepseek-flash"),
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": 0.3,
-                            "max_tokens": 1024,
-                        },
-                    )
-                if resp.status_code == 200:
-                    ai_analysis = resp.json()["choices"][0]["message"]["content"]
-                else:
-                    print(f"[日报 AI 分析失败] HTTP {resp.status_code}: {resp.text[:200]}")
+                # 认证方式（Bearer / Basic / URL 内嵌 user:pass）由 LLMClient 统一处理
+                ai_analysis = self.llm.chat_text(prompt, max_tokens=1024)
             except Exception as exc:
                 print(f"[日报 AI 分析失败] {exc}")
                 ai_analysis = None  # AI 失败回退纯模板
@@ -414,7 +418,12 @@ class DailyHelper:
                 report_builder=build_report,
                 config=self.config,
                 settings_callback=self._reload_settings,
-                llm_tester=self.llm.test_connection,
+                # 用 _make_llm_tester() 而非直接绑定 self.llm.test_connection：
+                # 直接绑定会把「启动那一刻」的 LLMClient 实例写死，设置页改了
+                # api_key/api_base 后，识别循环用的是新客户端、而「测试连接」
+                # 仍在用旧客户端的旧凭据 —— 表现为假阴性（Key 明明改对了，
+                # 测试连接却仍报 401）。详见 _make_llm_tester 的 docstring。
+                llm_tester=self._make_llm_tester(),
                 archive=self.archive,
                 export_dir=self.export_dir,
                 onboarding=self.onboarding,

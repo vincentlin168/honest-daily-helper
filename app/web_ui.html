@@ -320,15 +320,34 @@
         <div class="form-row">
           <label>API 地址</label>
           <input type="text" id="set-api-base" value="https://api.deepseek.com/v1">
+          <div class="hint">OpenAI 兼容地址；也可内嵌凭据，如 https://user:pass@host/v1</div>
         </div>
         <div class="form-row">
           <label>模型名</label>
           <input type="text" id="set-model" value="deepseek-flash">
         </div>
         <div class="form-row">
+          <label>认证方式</label>
+          <select id="set-auth-type">
+            <option value="">自动（有 Key 用 Bearer，有用户名密码用 Basic）</option>
+            <option value="bearer">Bearer（API Key）</option>
+            <option value="basic">Basic（用户名 + 密码）</option>
+            <option value="none">不鉴权</option>
+          </select>
+        </div>
+        <div class="form-row">
           <label>API Key</label>
           <input type="password" id="set-api-key" placeholder="留空表示不修改">
           <div class="hint">Key 只保存在本机 config.json，不回显明文</div>
+        </div>
+        <div class="form-row">
+          <label>用户名</label>
+          <input type="text" id="set-api-username" placeholder="Basic 认证用，可留空">
+        </div>
+        <div class="form-row">
+          <label>密码</label>
+          <input type="password" id="set-api-password" placeholder="留空表示不修改">
+          <div class="hint">Basic 认证密码；只保存在本机，不回显明文</div>
         </div>
         <div class="form-row">
           <button class="btn secondary" id="btn-test-llm" onclick="testLLM()">测试连接</button>
@@ -961,6 +980,9 @@
         api_base: c.api_base || '',
         model: c.model || '',
         api_key: '',
+        auth_type: c.auth_type || '',
+        api_username: c.api_username || '',
+        api_password: '',
         region_preset: c.region_preset || 'full',
         snap_interval: c.snap_interval || 15,
         categories: (c.categories || []).join('\n'),
@@ -1013,9 +1035,29 @@
           <div class="hint">必须支持看图（vision）。纯文本模型无法识别截图</div>
         </div>
         <div class="form-row">
+          <label>认证方式</label>
+          <select id="ob-auth-type" onchange="ob.values.auth_type=this.value">
+            <option value="" ${ob.values.auth_type === '' ? 'selected' : ''}>自动（有 Key 用 Bearer，有用户名密码用 Basic）</option>
+            <option value="bearer" ${ob.values.auth_type === 'bearer' ? 'selected' : ''}>Bearer（API Key）</option>
+            <option value="basic" ${ob.values.auth_type === 'basic' ? 'selected' : ''}>Basic（用户名 + 密码）</option>
+            <option value="none" ${ob.values.auth_type === 'none' ? 'selected' : ''}>不鉴权</option>
+          </select>
+        </div>
+        <div class="form-row">
           <label>API Key</label>
           <input type="password" id="ob-api-key" placeholder="粘贴你的 API Key" oninput="ob.values.api_key=this.value">
           <div class="hint">只保存在本机 config.json，不会上传到任何地方</div>
+        </div>
+        <div class="form-row">
+          <label>用户名</label>
+          <input type="text" id="ob-api-username" placeholder="Basic 认证用，可留空"
+                 value="${esc(ob.values.api_username)}" oninput="ob.values.api_username=this.value">
+        </div>
+        <div class="form-row">
+          <label>密码</label>
+          <input type="password" id="ob-api-password" placeholder="Basic 认证用，可留空"
+                 oninput="ob.values.api_password=this.value">
+          <div class="hint">也可以把凭据内嵌进 API 地址：https://用户名:密码@主机/v1</div>
         </div>
         <div id="ob-msg"></div>
         <button class="btn secondary" id="ob-test" onclick="obTest()">测试连接</button>
@@ -1119,11 +1161,14 @@
     const body = {
       api_base: ob.values.api_base,
       model: ob.values.model,
+      auth_type: ob.values.auth_type,
+      api_username: ob.values.api_username,
       region_preset: ob.values.region_preset,
       snap_interval: parseInt(ob.values.snap_interval) || 15,
       categories: (ob.values.categories || '').split('\n').map(s => s.trim()).filter(s => s),
     };
     if (ob.values.api_key) body.api_key = ob.values.api_key;
+    if (ob.values.api_password) body.api_password = ob.values.api_password;
     if (finish) body.finish = true;
     const r = await fetch('/api/onboarding/apply', {
       method: 'POST',
@@ -1185,6 +1230,8 @@
       document.getElementById('set-region').value = cfg.capture?.region_preset ?? 'full';
       document.getElementById('set-api-base').value = cfg.llm?.api_base ?? '';
       document.getElementById('set-model').value = cfg.llm?.model ?? 'deepseek-flash';
+      document.getElementById('set-auth-type').value = cfg.llm?.auth_type ?? '';
+      document.getElementById('set-api-username').value = cfg.llm?.api_username ?? '';
       document.getElementById('set-price-in').value = cfg.llm?.price_per_1m_input ?? 0;
       document.getElementById('set-price-out').value = cfg.llm?.price_per_1m_output ?? 0;
       document.getElementById('set-trigger').value = cfg.report?.trigger ?? 'both';
@@ -1231,6 +1278,8 @@
       llm: {
         api_base: document.getElementById('set-api-base').value,
         model: document.getElementById('set-model').value,
+        auth_type: document.getElementById('set-auth-type').value,
+        api_username: document.getElementById('set-api-username').value,
         price_per_1m_input: parseFloat(document.getElementById('set-price-in').value) || 0,
         price_per_1m_output: parseFloat(document.getElementById('set-price-out').value) || 0,
       },
@@ -1241,6 +1290,8 @@
     };
     const key = document.getElementById('set-api-key').value;
     if (key && !key.includes('...')) body.llm.api_key = key;
+    const pwd = document.getElementById('set-api-password').value;
+    if (pwd && !pwd.includes('...')) body.llm.api_password = pwd;
     try {
       const r = await fetch('/api/settings', {
         method: 'POST',

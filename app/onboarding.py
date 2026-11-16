@@ -5,7 +5,7 @@ Spec
 新用户第一次打开 Web 界面时，不应该面对一堆空白的输入框不知道填什么。
 引导向导做三件事：
 
-1. **判断是否需要引导**：API Key 没配 -> 需要；已配好 -> 跳过。
+1. **判断是否需要引导**：凭据没配 -> 需要；已配好 -> 跳过。
 2. **分步收集必要信息**：模型连接 -> 抓屏区域 -> 分类偏好 -> 完成。
 3. **每一步都能验证**：连不上就直接报错，不让用户走到最后才发现 Key 是错的。
 
@@ -18,6 +18,10 @@ Spec
    分类默认给一套通用分类，用户可以改。
 4. **诚实**：每一步都告诉用户「这一步在做什么、失败了会怎样」，
    不做「一键搞定」的假承诺。
+5. **凭据形态不限于 API Key**：判定「是否需要引导」的实质条件是
+   **「凭据已配好」**，而非「有没有 api_key 字段」。Basic 认证用户
+   （用户名 + 密码，或 URL 内嵌 ``user:pass@``）同样算配好，
+   否则会被反复拉回引导页。
 
 配置结构：
     onboarding:  completed(bool) / completed_at(str) / skipped(bool)
@@ -97,12 +101,23 @@ class Onboarding:
         """是否已完成过引导。
 
         判据不是「有没有 onboarding.completed_at 这个字段」，
-        而是**实质条件**：API Key 已经填好（且不是占位符）。
-        这样即使用户手删了标记，只要 Key 配好了也不会被重复打扰。
+        而是**实质条件**：凭据已经配好（且不是占位符）。
+        这样即使用户手删了标记，只要凭据配好了也不会被重复打扰。
+
+        凭据可以是 API Key（Bearer），也可以是用户名+密码（Basic），
+        或者 URL 里内嵌了 ``user:pass@``。
         """
         if self.config is None:
             return False
         key = str(self.config.get("llm", "api_key", default="") or "").strip()
+        user = str(self.config.get("llm", "api_username", default="") or "").strip()
+        pwd = str(self.config.get("llm", "api_password", default="") or "").strip()
+        base = str(self.config.get("llm", "api_base", default="") or "").strip()
+        has_url_creds = "@" in base.split("://", 1)[-1].split("/", 1)[0]
+
+        # Basic 认证：用户名+密码 或 URL 内嵌凭据
+        if (user and pwd) or has_url_creds:
+            return True
         if not key or _KEY_SUSPICIOUS.match(key):
             return False
         if key == "your-api-key-here":
@@ -151,16 +166,23 @@ class Onboarding:
         return list(REGION_OPTIONS)
 
     # ---------- 校验 ----------
-    def validate_model(self, api_base: str, model: str, api_key: str) -> Dict[str, Any]:
+    def validate_model(self, api_base: str, model: str, api_key: str,
+                       auth_type: str = "", api_username: str = "",
+                       api_password: str = "") -> Dict[str, Any]:
         """校验模型配置的基本合理性（不做网络请求）。
 
         网络连通性由 ``POST /api/llm/test`` 单独验证 ——
         这里只挡「明显填错」的情况，给出即时反馈，不用等用户点下一步。
+
+        认证方式：Bearer 需要 api_key；Basic 需要用户名+密码（或 URL 内嵌
+        ``user:pass@``）。两种都缺失才报错。
         """
         problems: List[str] = []
         base = (api_base or "").strip()
         name = (model or "").strip()
         key = (api_key or "").strip()
+        user = (api_username or "").strip()
+        pwd = (api_password or "").strip()
 
         if not base:
             problems.append("API 地址不能为空")
@@ -168,10 +190,26 @@ class Onboarding:
             problems.append("API 地址应以 http:// 或 https:// 开头")
         if not name:
             problems.append("模型名不能为空")
-        if not key:
-            problems.append("API Key 不能为空")
-        elif _KEY_SUSPICIOUS.match(key):
-            problems.append("API Key 看起来还是示例值，请填入你真实的 Key")
+
+        # 判定实际认证方式（与 LLMClient._resolved_auth_type 保持一致）
+        mode = (auth_type or "").strip().lower()
+        has_url_creds = "@" in base.split("://", 1)[-1].split("/", 1)[0]
+        if mode == "basic":
+            if not (user and pwd) and not has_url_creds:
+                problems.append("Basic 认证需要填写用户名和密码（或在地址里内嵌 user:pass@）")
+        elif mode == "bearer":
+            if not key:
+                problems.append("Bearer 认证需要填写 API Key")
+        elif mode == "none":
+            pass
+        else:
+            # 自动：有 URL 内嵌凭据或显式用户名 -> basic；有 Key -> bearer
+            if (user and pwd) or has_url_creds:
+                pass
+            elif not key:
+                problems.append("请填写 API Key，或改用用户名+密码（Basic 认证）")
+            elif _KEY_SUSPICIOUS.match(key):
+                problems.append("API Key 看起来还是示例值，请填入你真实的 Key")
 
         return {
             "ok": not problems,

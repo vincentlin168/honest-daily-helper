@@ -43,6 +43,48 @@ class TestTrayAvailability(unittest.TestCase):
         self.assertEqual(img.size, (32, 32))
 
 
+class TestClassNameUniqueness(unittest.TestCase):
+    """窗口类名必须真正唯一，且撞名时能换名重试。
+
+    这是 CI 上真实踩到的坑：原实现用 ``id(self)`` 生成类名，
+    而 CPython 的 ``id()`` 是内存地址，对象回收后会被复用 ——
+    新实例可能拿到与「已注册未注销」的类相同的名字，
+    ``RegisterClassW`` 报 1410（ERROR_CLASS_ALREADY_EXISTS）。
+    表现为随机失败：3.12/3.13 通过、3.11 失败。
+    """
+
+    def test_class_names_are_unique_across_calls(self):
+        """连续生成的类名不得重复。"""
+        names = [tray_mod._make_class_name() for _ in range(200)]
+        self.assertEqual(len(names), len(set(names)),
+                         "窗口类名重复 -> RegisterClassW 会报 1410")
+
+    def test_class_name_does_not_use_id(self):
+        """类名不得依赖 id(self)（内存地址会被复用）。"""
+        # 造两个实例，模拟「前一个被回收、地址被复用」的情形
+        for _ in range(3):
+            TrayIcon()
+        name1 = tray_mod._make_class_name()
+        name2 = tray_mod._make_class_name()
+        self.assertNotEqual(name1, name2)
+        # 确认生成逻辑与实例地址无关：连续调用必然不同
+        self.assertNotEqual(name1, tray_mod._make_class_name())
+
+    def test_class_name_has_expected_shape(self):
+        name = tray_mod._make_class_name()
+        self.assertTrue(name.startswith("HHDTray_"))
+        self.assertIn(str(__import__("os").getpid()), name)
+
+    @unittest.skipUnless(is_windows(), "仅 Windows 才有窗口类")
+    def test_repeated_start_stop_does_not_collide(self):
+        """反复起停托盘不应因类名冲突而失败（1410）。"""
+        for i in range(5):
+            t = TrayIcon()
+            ok = t.start(timeout=5.0)
+            self.assertTrue(ok, f"第 {i + 1} 次托盘启动失败: {t.error}")
+            t.stop()
+
+
 class TestTrayCommandDispatch(unittest.TestCase):
     """菜单命令 -> 回调的分发。"""
 
