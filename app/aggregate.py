@@ -51,22 +51,41 @@ def apply(
     monitors: str = "",
     now: Optional[int] = None,
     max_duration: int = MAX_DURATION,
+    started_at: Optional[int] = None,
 ) -> Tuple[str, int]:
     """核心聚合逻辑：决定新建还是延长，返回 (action, entry_id)。
 
+    :param now: 本次活动**结束**的时刻（写入 ended_at）
+    :param started_at: 本次活动**开始**的时刻（写入 started_at）。
+        与 now 相同则退化为零长度记录。默认取 now。
     :return: ('created', id) 或 ('merged', id)
     """
     from datetime import datetime
     if now is None:
         now = int(datetime.now().timestamp())
+    if started_at is None:
+        started_at = now
 
     latest = store.latest_entry()
     if latest and should_merge_content(activity, latest.get("activity", "")):
         store.extend_entry(latest["id"], now, max_duration)
+        # 合并时保留**更详细**的那份描述，而不是无脑保留第一次的。
+        #
+        # 背景：聚合判定只看 activity 标签，content 完全不参与。
+        # 若合并时直接丢弃新 content，则一个 8 次识别的周期里
+        # 只有第一次的描述能留下来，后面 7 次更详细的描述全被扔掉 ——
+        # 相当于花了 8 次的钱，只买了 1 次的信息。
+        #
+        # 规则：新的更详细就替换，旧的更详细就保留；同样长时保留旧的
+        # （保持「首次描述」的时间顺序语义）。
+        old_content = (latest.get("content") or "").strip()
+        new_content = (content or "").strip()
+        if len(new_content) > len(old_content):
+            store.update_entry(latest["id"], content=new_content)
         return ("merged", latest["id"])
 
     entry_id = store.insert_entry({
-        "started_at": now,
+        "started_at": started_at,
         "ended_at": now,
         "activity": activity,
         "monitors": monitors,

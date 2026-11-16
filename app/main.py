@@ -163,15 +163,53 @@ class DailyHelper:
             })
             return {"_error": str(exc)}
 
-    def summarize_buffer(self, buffer: list) -> Dict[str, int]:
+    def summarize_buffer(self, buffer: list, summary_at: Optional[int] = None) -> Dict[str, int]:
         """把 buffer 里的识别结果聚合写入 store（相同 activity 自动合并成活动段）。
 
+        时间语义
+        --------
+        每条识别记录了它**被识别的那一刻**（``rec["_at"]``）。
+        但一段活动的时间范围应该是「本周期内第一次识别」到「汇总时刻」——
+        中间即使画面一直不变（没产生新的识别），那段时间也是工作时间。
+
+        若直接用 ``rec["_at"]`` 作 now，新建记录的 started_at 与 ended_at
+        会落在同一刻 -> 时长 0 秒，整段时间从时间线上消失。
+
+        所以这里取：
+        - ``started_at`` = 上一条识别时刻（首条则用自身 _at）
+        - ``now``         = 本条识别时刻
+        - 最后一条的 now 额外延伸到 ``summary_at``（汇总时刻），
+          这样「最后一次识别之后、画面一直没变」的那段尾巴也能计入。
+
+        为避免相邻记录重叠，新建记录时若 ``started_at`` 早于
+        「上一条活动段的结束时刻」，则把 ``started_at`` 推到该结束时刻 ——
+        时间线应当首尾相接，不该有交集。
+
+        :param summary_at: 本周期的汇总时刻（Unix 秒）。默认取当前时间。
         :return: {recognized, created, merged}
         """
         created = merged = 0
-        for rec in buffer:
-            if "_error" in rec:
-                continue
+        valid = [rec for rec in buffer if "_error" not in rec and "_at" in rec]
+        if not valid:
+            return {"recognized": len(buffer), "created": 0, "merged": 0}
+        if summary_at is None:
+            summary_at = int(datetime.now().timestamp())
+        prev_at: Optional[int] = None
+        for idx, rec in enumerate(valid):
+            at = int(rec["_at"])
+            started = prev_at if prev_at is not None else at
+            # 最后一条延伸到汇总时刻，覆盖「识别之后画面一直没变」的尾巴
+            now = summary_at if (idx == len(valid) - 1 and summary_at > at) else at
+
+            # 新建时避免与上一条记录重叠：起点推到上一条的结束时刻
+            if started > now:
+                started = now
+            latest = self.store.latest_entry()
+            if latest and latest.get("activity") != rec["activity"]:
+                prev_end = int(latest.get("ended_at") or 0)
+                if prev_end > started:
+                    started = min(prev_end, now)
+
             action, _ = aggregate.apply(
                 self.store,
                 rec["activity"],
@@ -179,12 +217,14 @@ class DailyHelper:
                 rec["category"],
                 model=self.llm.model,
                 source="screenshot",
-                now=rec["_at"],
+                now=now,
+                started_at=started,
             )
             if action == "created":
                 created += 1
             else:
                 merged += 1
+            prev_at = at
         return {"recognized": len(buffer), "created": created, "merged": merged}
 
     # ---------- 核心流程 ----------
@@ -344,7 +384,9 @@ class DailyHelper:
             # 第二层：到汇总周期，把 buffer 聚合成活动段写入
             if time.time() - last_summary >= summary_interval:
                 if buffer:
-                    stat = self.summarize_buffer(buffer)
+                    # 传入汇总时刻：最后一段活动要延伸到此刻，
+                    # 否则「最后一次识别之后画面一直没变」的那段尾巴会丢失。
+                    stat = self.summarize_buffer(buffer, summary_at=int(time.time()))
                     log.info("[汇总] 本周期识别 %d 次 → 新建 %d 段 / 合并 %d 段",
                              stat['recognized'], stat['created'], stat['merged'])
                 buffer = []
