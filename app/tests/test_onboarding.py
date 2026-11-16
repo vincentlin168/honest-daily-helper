@@ -13,6 +13,7 @@
 4. **安全**：api_key 永不通过公共接口回显。
 """
 
+import json
 import sys
 import tempfile
 import unittest
@@ -183,6 +184,64 @@ class TestPublicConfigNoSecret(unittest.TestCase):
         pub = cfg.to_public_dict()
         self.assertNotIn("sk-secret-value-1234", str(pub))
         self.assertIn("...", pub["llm"]["api_key"])
+
+
+class TestConfigRobustness(unittest.TestCase):
+    """配置文件健壮性 —— 新手最常踩的坑。"""
+
+    def test_utf8_bom_is_accepted(self):
+        """记事本另存为 UTF-8 会加 BOM，不能因此启动失败。
+
+        回归背景：打包成 exe 后实测崩溃
+        ``JSONDecodeError: Unexpected UTF-8 BOM``。
+        """
+        tmp = tempfile.mkdtemp()
+        p = Path(tmp) / "config.json"
+        p.write_bytes(b"\xef\xbb\xbf" + json.dumps(
+            {"llm": {"api_key": "sk-bom-test-1234"}}, ensure_ascii=False).encode("utf-8"))
+        cfg = Config(str(p))
+        self.assertEqual(cfg.get("llm", "api_key"), "sk-bom-test-1234")
+
+    def test_invalid_json_raises_readable_error(self):
+        """非法 JSON 要给出人能看懂的原因，而不是裸的 JSONDecodeError。"""
+        tmp = tempfile.mkdtemp()
+        p = Path(tmp) / "config.json"
+        p.write_text('{"llm": {,}}', encoding="utf-8")
+        with self.assertRaises(ValueError) as ctx:
+            Config(str(p))
+        msg = str(ctx.exception)
+        self.assertIn("不是合法的 JSON", msg)
+        self.assertIn("引号", msg)
+
+    def test_save_writes_no_bom(self):
+        """保存的文件不带 BOM，保证任何编辑器都能正常打开。"""
+        tmp = tempfile.mkdtemp()
+        p = Path(tmp) / "config.json"
+        cfg = Config(str(p))
+        cfg.set("llm", "api_key", "sk-abc")
+        cfg.save()
+        self.assertFalse(p.read_bytes().startswith(b"\xef\xbb\xbf"))
+
+    def test_save_creates_backup(self):
+        """覆盖前先备份，防止一次误写就丢掉用户配置。"""
+        tmp = tempfile.mkdtemp()
+        p = Path(tmp) / "config.json"
+        cfg = Config(str(p))
+        cfg.set("llm", "api_key", "sk-first-1234")
+        cfg.save()
+        cfg.set("llm", "api_key", "sk-second-5678")
+        cfg.save()
+        bak = Path(str(p) + ".bak")
+        self.assertTrue(bak.exists())
+        with open(bak, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["llm"]["api_key"], "sk-first-1234")
+
+    def test_missing_config_uses_defaults(self):
+        tmp = tempfile.mkdtemp()
+        cfg = Config(str(Path(tmp) / "nope.json"))
+        self.assertEqual(cfg.get("llm", "model"), "deepseek-flash")
+        self.assertTrue(cfg.get("tray", "enabled", default=False))
+        self.assertIn("onboarding", cfg.to_dict())
 
 
 if __name__ == "__main__":

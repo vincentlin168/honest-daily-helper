@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, List
 from urllib.parse import urlparse, parse_qs
 
+import archive_data
 import exporter
 from overview import build_overview
 
@@ -280,6 +281,36 @@ class SkillHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "date": date, "report": body})
             return
 
+        # ---------- 历史数据归档 ----------
+        if path == "/api/data/archive/scan":
+            if not type(self).store:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            before = (query.get("before") or [""])[0]
+            before_ts = int(before) if before.isdigit() else None
+            self._send_json({"ok": True, **archive_data.scan_defective(
+                type(self).store, before_ts)})
+            return
+
+        if path == "/api/data/archive/list":
+            if not type(self).store:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            limit = int((query.get("limit") or ["100"])[0])
+            offset = int((query.get("offset") or ["0"])[0])
+            self._send_json({"ok": True, **archive_data.list_archived(
+                type(self).store, limit=limit, offset=offset)})
+            return
+
+        if path == "/api/data/archive/export":
+            if not type(self).store:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            out = str(Path(type(self).export_dir) / "archived_entries.json")
+            self._send_json({"ok": True, **archive_data.export_archived(
+                type(self).store, out)})
+            return
+
         # 导出预览（不写文件，仅返回内容，便于前端「复制到剪贴板」）
         if path == "/api/export/preview":
             date = (query.get("date") or [""])[0]
@@ -384,6 +415,32 @@ class SkillHandler(BaseHTTPRequestHandler):
                 return
             ob.mark_skipped()
             self._send_json({"ok": True, "completed": ob.is_completed()})
+            return
+
+        # ---------- 历史数据归档：执行归档 / 恢复 ----------
+        if path == "/api/data/archive/run":
+            if not type(self).store:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            body = self._read_json_body()
+            before = body.get("before")
+            before_ts = int(before) if isinstance(before, (int, str)) and str(before).isdigit() else None
+            dry_run = bool(body.get("dry_run", False))
+            self._send_json({"ok": True, **archive_data.archive_defective(
+                type(self).store, before_ts, dry_run=dry_run)})
+            return
+
+        if path == "/api/data/archive/restore":
+            if not type(self).store:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            body = self._read_json_body()
+            ids = body.get("ids")
+            if ids is not None and not isinstance(ids, list):
+                self._send_json({"ok": False, "error": "ids 必须是数组"}, status=400)
+                return
+            self._send_json({"ok": True, **archive_data.restore_archived(
+                type(self).store, ids)})
             return
 
         # 手动改分类：/api/entries/{id}/category

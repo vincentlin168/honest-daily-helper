@@ -239,6 +239,24 @@
       </div>
 
       <div class="card">
+        <h2>历史数据归档</h2>
+        <div class="hint" style="margin-bottom:12px">
+          v2 修复了「静态屏幕遗漏」和「零秒条目」两个缺陷。修复前积累的记录带着这些缺陷 ——
+          时长为 0，会让总时长被低估、时间线被切碎。归档把它们移走，让统计只反映修复后的真实数据。
+          <b>一条都不会丢</b>，随时可以恢复或导出。
+        </div>
+        <div id="arch-scan" style="margin-bottom:12px"></div>
+        <div class="row-actions" style="margin-bottom:12px">
+          <button class="btn secondary" onclick="scanArchive()">扫描</button>
+          <button class="btn" onclick="runArchive()" id="btn-run-archive">执行归档</button>
+          <button class="btn secondary" onclick="restoreArchive()">恢复全部</button>
+          <button class="btn secondary" onclick="exportArchived()">导出归档</button>
+        </div>
+        <div id="arch-result"></div>
+        <ul class="arch-list" id="arch-archived-list"></ul>
+      </div>
+
+      <div class="card">
         <h2>错误诊断</h2>
         <div class="toolbar">
           <select id="err-days" style="padding:8px;border:1px solid var(--border);border-radius:6px">
@@ -396,7 +414,7 @@
       if (btn.dataset.tab === 'timeline') loadTimeline();
       if (btn.dataset.tab === 'overview') { loadOverview(); loadHeatmap(); }
       if (btn.dataset.tab === 'archive') loadArchive();
-      if (btn.dataset.tab === 'data') { loadErrors(); loadExportDates(); }
+      if (btn.dataset.tab === 'data') { loadErrors(); loadExportDates(); scanArchive(); loadArchivedList(); }
     });
   });
 
@@ -718,6 +736,102 @@
       if (!d.ok) { toast('导出失败：' + (d.error || '未知错误')); return; }
       toast(d.message);
     } catch (e) { toast('导出失败：' + e.message); }
+  }
+
+  // 历史数据归档
+  async function scanArchive() {
+    const box = document.getElementById('arch-scan');
+    box.innerHTML = '<div class="empty">扫描中…</div>';
+    try {
+      const r = await fetch('/api/data/archive/scan');
+      const d = await r.json();
+      if (!d.ok) { box.innerHTML = '<div class="empty">扫描失败</div>'; return; }
+      const pct = d.defective_pct.toFixed(1);
+      box.innerHTML = `
+        <div class="stat-grid">
+          <div class="stat"><div class="label">扫描记录</div><div class="value">${d.total_scanned}</div></div>
+          <div class="stat ${d.defective ? 'accent' : ''}">
+            <div class="label">有缺陷（零秒）</div>
+            <div class="value">${d.defective}</div>
+            <div class="sub">占 ${pct}%</div>
+          </div>
+          <div class="stat"><div class="label">正常记录</div><div class="value">${d.healthy}</div></div>
+        </div>`;
+    } catch (e) {
+      box.innerHTML = '<div class="empty">扫描失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function runArchive() {
+    const res = document.getElementById('arch-result');
+    if (!confirm('把有缺陷的零秒记录移入归档区？\n\n记录不会被删除，随时可以恢复或导出。')) return;
+    res.innerHTML = '<div class="empty">归档中…</div>';
+    try {
+      const r = await fetch('/api/data/archive/run', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({dry_run: false})
+      });
+      const d = await r.json();
+      if (!d.ok) { res.innerHTML = '<div class="empty">归档失败：' + esc(d.error || '') + '</div>'; return; }
+      res.innerHTML = `<div class="ob-ok">已归档 ${d.archived} 条有缺陷记录。剩余正常记录 ${d.healthy} 条。</div>`;
+      scanArchive();
+      loadArchivedList();
+      loadOverview();
+    } catch (e) {
+      res.innerHTML = '<div class="empty">归档失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function restoreArchive() {
+    const res = document.getElementById('arch-result');
+    if (!confirm('把所有归档记录搬回时间线？')) return;
+    res.innerHTML = '<div class="empty">恢复中…</div>';
+    try {
+      const r = await fetch('/api/data/archive/restore', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+      });
+      const d = await r.json();
+      if (!d.ok) { res.innerHTML = '<div class="empty">恢复失败</div>'; return; }
+      res.innerHTML = `<div class="ob-ok">已恢复 ${d.restored} 条记录${d.skipped ? '（' + d.skipped + ' 条因 ID 冲突跳过）' : ''}。</div>`;
+      scanArchive();
+      loadArchivedList();
+      loadOverview();
+    } catch (e) {
+      res.innerHTML = '<div class="empty">恢复失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function exportArchived() {
+    const res = document.getElementById('arch-result');
+    try {
+      const r = await fetch('/api/data/archive/export');
+      const d = await r.json();
+      if (!d.ok) { res.innerHTML = '<div class="empty">导出失败</div>'; return; }
+      res.innerHTML = `<div class="ob-ok">已导出 ${d.count} 条归档记录到 ${esc(d.path)}</div>`;
+    } catch (e) {
+      res.innerHTML = '<div class="empty">导出失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function loadArchivedList() {
+    const list = document.getElementById('arch-archived-list');
+    if (!list) return;
+    try {
+      const r = await fetch('/api/data/archive/list?limit=50');
+      const d = await r.json();
+      if (!d.ok) { list.innerHTML = ''; return; }
+      if (!d.total) { list.innerHTML = '<div class="empty">还没有归档记录</div>'; return; }
+      list.innerHTML = `<div class="hint" style="margin-bottom:8px">共 ${d.total} 条，显示最近 50 条</div>` +
+        d.entries.map(e => `
+          <li>
+            <span class="d">${esc(fmtDateTime(e.started_at))}</span>
+            <span class="p" title="${esc(e.content)}">${esc(e.activity || e.content || '')}</span>
+            <span class="sz">${esc(e.archive_reason || '')}</span>
+          </li>`).join('');
+    } catch (e) { list.innerHTML = ''; }
   }
 
   // 错误诊断

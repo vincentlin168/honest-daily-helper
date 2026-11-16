@@ -110,8 +110,22 @@ class Config:
 
     # ---------- 读写 ----------
     def load(self) -> None:
-        with open(self.config_path, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
+        """读取配置。
+
+        用 ``utf-8-sig`` 而不是 ``utf-8``：Windows 记事本另存为 UTF-8 时
+        会加 BOM（字节序标记），用纯 utf-8 读会抛 JSONDecodeError，
+        让整个程序起不来 —— 这是新手最常踩的坑之一。
+        ``utf-8-sig`` 对有无 BOM 都能正常解析。
+        """
+        try:
+            with open(self.config_path, "r", encoding="utf-8-sig") as f:
+                loaded = json.load(f)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"配置文件不是合法的 JSON：{self.config_path}\n"
+                f"原因：{exc}\n"
+                f"提示：请检查引号是否成对、有没有多余逗号。"
+            ) from exc
         if not isinstance(loaded, dict):
             raise ValueError(f"配置文件格式错误，应为 JSON 对象：{self.config_path}")
         # 用默认值兜底缺失的顶层/嵌套键

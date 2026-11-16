@@ -20,7 +20,14 @@ a = Analysis(
         (os.path.join(BASE, 'web_ui.html'), '.'),
         (os.path.join(BASE, 'config.example.json'), '.'),
     ],
-    hiddenimports=[],
+    # 动态导入的模块必须显式声明，否则 PyInstaller 分析不到：
+    #   tray        —— main.py 用 `from tray import TrayIcon` 在函数内延迟导入
+    #   onboarding  —— 同上，且 skill_server 通过类属性引用
+    hiddenimports=[
+        'tray',
+        'onboarding',
+        'archive_data',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

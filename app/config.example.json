@@ -16,7 +16,9 @@
     "region_preset": "full"
   },
   "storage": {
-    "db_path": "records.db"
+    "db_path": "records.db",
+    "archive_dir": "outputs/reports",
+    "export_dir": "exports"
   },
   "report": {
     "trigger": "both",
@@ -32,6 +34,14 @@
     "enabled": true,
     "port": 8088,
     "token": ""
+  },
+  "tray": {
+    "enabled": true
+  },
+  "onboarding": {
+    "completed": false,
+    "completed_at": "",
+    "skipped": false
   },
   "categories": [
     "产品设计",
