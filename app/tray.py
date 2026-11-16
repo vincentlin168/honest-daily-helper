@@ -27,6 +27,8 @@ pystray 依赖 pywin32 / PIL，pywin32 又依赖编译扩展 —— 都装不上
    ``GetMessage``（主程序用的是 Python 层的循环）。
 4. **安全降级**：非 Windows 平台直接返回不可用，程序照常跑 ——
    托盘是增强，不是依赖。
+5. **窗口类名不靠对象地址**：用进程内单调计数器生成，注册撞名
+   （1410）时自动换名重试。详见 ``_make_class_name``。
 
 限制
 ----
@@ -62,6 +64,44 @@ LR_LOADFROMFILE = 0x0010
 LR_DEFAULTSIZE = 0x0040
 IMAGE_ICON = 1
 IDI_APPLICATION = 32512
+
+# Win32 错误码
+ERROR_CLASS_ALREADY_EXISTS = 1410
+
+# 窗口类名计数器（见 _make_class_name 的说明）
+_class_seq = 0
+_class_seq_lock = threading.Lock()
+
+
+def _make_class_name() -> str:
+    """生成一个**本进程内绝不重复**的窗口类名。
+
+    为什么不用 ``id(self)``
+    ----------------------
+    原实现是 ``f"HHDTray_{os.getpid()}_{id(self)}"``。但 CPython 的
+    ``id()`` 是**内存地址**，对象被回收后该地址会被下一个对象复用 ——
+    于是新托盘实例可能拿到与「已注册但尚未注销」的窗口类完全相同的名字，
+    ``RegisterClassW`` 返回 0，错误码 1410
+    （ERROR_CLASS_ALREADY_EXISTS）。
+
+    这在 CI 上表现为随机失败：同一份代码，Python 3.12/3.13 通过、
+    3.11 失败；本地连跑也可能时好时坏。本地实测 3.13 稳定通过，
+    而 CI 的 3.11 稳定撞上 —— 典型的「按对象地址认人」的经典 bug。
+
+    为什么用计数器还是不够
+    ----------------------
+    单调计数器只在**同一进程内**唯一。托盘「起停」时若上一次没走到
+    ``UnregisterClassW``（例如线程被强杀），残留的类名仍会留在系统里。
+    所以注册失败且错误码是 1410 时，必须**换一个名字重试**，
+    而不是直接放弃。
+
+    :return: 形如 ``HHDTray_<pid>_<seq>`` 的类名
+    """
+    global _class_seq
+    with _class_seq_lock:
+        _class_seq += 1
+        seq = _class_seq
+    return f"HHDTray_{os.getpid()}_{seq}"
 
 # 菜单命令 ID（自定义区间，避免与系统命令冲突）
 CMD_OPEN = 1001
@@ -329,9 +369,8 @@ class TrayIcon:
         hinst = kernel32.GetModuleHandleW(None)
 
         # 类名必须唯一：同名类重复注册会失败（错误码 1410 = ERROR_CLASS_ALREADY_EXISTS）。
-        # 之前用固定类名，第二次 start() 就会失败 —— 托盘必须能反复起停。
-        class_name = f"HHDTray_{os.getpid()}_{id(self)}"
-        self._class_name = class_name
+        # 用单调计数器生成进程内唯一名；见 _make_class_name 的说明（为什么不能用 id(self)）。
+        class_name = _make_class_name()
 
         # 自己拼 WNDCLASS 结构（ctypes.wintypes 没有现成的 WNDCLASSW）
         class WNDCLASS(ctypes.Structure):
@@ -352,11 +391,25 @@ class TrayIcon:
         wc.style = 0x0003  # CS_HREDRAW | CS_VREDRAW
         wc.lpfnWndProc = wndproc
         wc.hInstance = hinst
-        wc.lpszClassName = class_name
 
-        if not user32.RegisterClassW(ctypes.byref(wc)):
-            err = kernel32.GetLastError()
-            self._error = (f"RegisterClassW 失败（错误码 {err}）")
+        # 注册。1410 = ERROR_CLASS_ALREADY_EXISTS：说明系统里还残留着
+        # 某个同名窗口类（上次没走到 UnregisterClassW）。换新名字重试即可，
+        # 直接失败会让托盘整个不可用 —— 而托盘只是「增强」，不该因此瘫掉。
+        registered = False
+        last_err = 0
+        for _attempt in range(8):
+            wc.lpszClassName = class_name
+            if user32.RegisterClassW(ctypes.byref(wc)):
+                registered = True
+                self._class_name = class_name
+                break
+            last_err = kernel32.GetLastError()
+            if last_err != ERROR_CLASS_ALREADY_EXISTS:
+                break
+            class_name = _make_class_name()  # 换个名字再试
+
+        if not registered:
+            self._error = f"RegisterClassW 失败（错误码 {last_err}）"
             self._ready.set()
             return
 

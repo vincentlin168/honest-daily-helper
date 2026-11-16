@@ -6,6 +6,11 @@
 
 ### 修复
 
+- **托盘窗口类名冲突（CI 随机失败）** —— `tray.py` 用 `f"HHDTray_{pid}_{id(self)}"`
+  生成窗口类名，而 CPython 的 `id()` 是内存地址、对象回收后会被复用，
+  新实例可能撞上「已注册未注销」的同名类，`RegisterClassW` 报 1410
+  （ERROR_CLASS_ALREADY_EXISTS）。表现为随机失败：同一份代码 3.12/3.13 通过、
+  3.11 失败。改用进程内单调计数器生成类名，并在撞名时自动换名重试。
 - **「测试连接」假阴性（凭据热更新后仍报 401）** —— `main.py` 启动时把
   `llm_tester=self.llm.test_connection` 直接绑给 `SkillServer`，该绑定固定住了
   **服务启动那一刻**的 `LLMClient` 实例。用户在设置页改掉 api_key / api_base 后，
