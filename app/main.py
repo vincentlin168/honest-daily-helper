@@ -39,6 +39,7 @@ from capture import Capture
 from config import Config
 from logging_setup import get_logger
 from llm_client import LLMClient
+from llm_client import PRIVACY_PRIVATE, PRIVACY_WORK
 from onboarding import Onboarding
 from report import build_report, build_ai_prompt
 from skill_server import SkillServer
@@ -47,9 +48,26 @@ from upload import ReportUploader
 
 log = get_logger()
 
+# 私人模式下的保底复核间隔（秒）：
+# 识别出私人场景后，即使画面一直不变，也每隔这么久强制问一次模型
+# 「现在还是私人场景吗」，以便用户切回工作后能及时恢复记录。
+# 取 60 秒是权衡：太短会白白烧 token，太长会漏记切回工作后的时间。
+PRIVATE_RECHECK_INTERVAL = 60
+
+# 私人场景处理方式（配置 privacy.mode）
+PRIVACY_MODE_EXCLUDE = "exclude"          # 完全排除：不写库、不计入工作时长
+PRIVACY_MODE_DESENSITIZE = "desensitize"  # 仅脱敏：写一条占位记录
+PRIVACY_MODE_OFF = "off"                  # 不过滤
+
 
 class DailyHelper:
     """诚实日报助手主类。"""
+
+    # 类级默认值：让 ``DailyHelper.__new__(DailyHelper)`` 这种
+    # 绕过 __init__ 构造的用法（测试里常见）也能安全访问这些属性。
+    # 隐私相关状态在这里兜底为「正常工作模式」—— 最保守的选择。
+    _private_mode = False
+    _last_private_check_ts: Optional[int] = None
 
     def __init__(self, config_path: Optional[str] = None):
         self.config = Config(config_path)
@@ -63,6 +81,11 @@ class DailyHelper:
         # 首次运行引导
         self.onboarding = Onboarding(self.config)
         self.tray = None
+        # 私人模式状态：一旦模型判定为 private，后续「画面未变」时
+        # **不能**延长上一条工作记录 —— 否则私人时段仍会被算成工作时长。
+        # 详见 _extend_current_activity 的 docstring。
+        self._private_mode = False
+        self._last_private_check_ts: Optional[int] = None
         self._init_capture_llm()
 
     def _init_capture_llm(self) -> None:
@@ -106,7 +129,20 @@ class DailyHelper:
 
         连续多次延长会受 ``aggregate.MAX_DURATION``（4 小时）封顶，
         保证单条记录不会无限延长。
+
+        私人模式下的例外
+        ----------------
+        模型判定当前是私人场景（``privacy="private"``）后，这段时间
+        **不应该**计入工作时长。如果这里照常延长上一条工作记录，
+        那么「切出去聊 10 分钟私人微信」会被算成 10 分钟工作 ——
+        恰恰违背「诚实不记录私人信息」的初衷。
+
+        所以私人模式下只记一条 skip_event 留痕，**不延长**任何工作记录。
         """
+        if self._private_mode:
+            # 私人时段：不碰工作记录，只留痕（可回溯「这段没记录是因为私人场景」）
+            self.store.insert_skip_event("private")
+            return
         latest = self.store.latest_entry()
         if not latest:
             return
@@ -157,14 +193,97 @@ class DailyHelper:
 
         少了第 1 步，实测会出现：9.5 小时的工作只记录了 4 小时，
         **58% 的工作时间在时间线上完全不可见**（见 tests/test_capture_interval.py）。
+
+        私人场景的处理
+        --------------
+        模型判定为 ``privacy="private"`` 时，这里**直接丢弃**该识别结果
+        （返回 ``None``），并置上 ``self._private_mode`` ——
+        之后「画面未变」也不会延长上一条工作记录，
+        这样私人时段既不留下记录，也不计入工作时长。
+
+        丢弃动作仍然写一条 ``skip_event(kind="private")`` 留痕：
+        「这段时间没记录」必须可解释，否则用户会以为程序漏记了。
+
+        私人模式如何解除
+        ----------------
+        识别出私人场景后，画面若一直不变就不会再触发识别，
+        「私人模式」也就永远解不开 —— 切回工作后那段工作时间会漏记。
+
+        所以私人模式下有一个**保底强制识别**机制：
+        每隔 ``PRIVATE_RECHECK_INTERVAL`` 秒（默认 60 秒），
+        即使画面未变也强制送一次模型确认。
+        这样最多损失 1 分钟的私人模式判定，
+        换来「切回工作立刻恢复记录」。
         """
         shot = self.capture.grab(save_to_disk=False)
         if shot.is_empty:
             # 画面未变：跳过识别（省 token），但要延长上一条记录 + 留痕
+            if self._private_mode and self._private_recheck_due():
+                # 私人模式保底复核：画面虽未变，但距上次确认已过一段时间，
+                # 强制问一次模型「现在还是私人场景吗」，以便及时解除私人模式。
+                # reset_hash 让下一次 grab 一定返回画面（绕过变更检测）。
+                self.capture.reset_hash()
+                return self._recognize_shot(self.capture.grab(save_to_disk=False))
             self._extend_current_activity()
-            self.store.insert_skip_event("unchanged")
+            if not self._private_mode:
+                self.store.insert_skip_event("unchanged")
             return None
 
+        return self._recognize_shot(shot)
+
+    def _private_recheck_due(self) -> bool:
+        """私人模式下的保底复核：距上次确认是否已超过间隔。"""
+        if self._last_private_check_ts is None:
+            return True
+        return (int(datetime.now().timestamp()) - self._last_private_check_ts) >= PRIVATE_RECHECK_INTERVAL
+
+    def _privacy_mode(self) -> str:
+        """读取隐私处理方式：exclude / desensitize / off。
+
+        没有 config 的场景（测试用 ``__new__`` 构造）默认用最严格的 exclude。
+        """
+        if self.config is None:
+            return PRIVACY_MODE_EXCLUDE
+        mode = self.config.get("privacy", "mode", default=PRIVACY_MODE_EXCLUDE)
+        mode = str(mode or "").strip().lower()
+        if mode not in (PRIVACY_MODE_EXCLUDE, PRIVACY_MODE_DESENSITIZE, PRIVACY_MODE_OFF):
+            return PRIVACY_MODE_EXCLUDE
+        return mode
+
+    def _privacy_extra_keywords(self) -> list:
+        """用户配置的额外屏蔽关键词。"""
+        if self.config is None:
+            return []
+        kws = self.config.get("privacy", "extra_keywords", default=[]) or []
+        if isinstance(kws, str):
+            kws = [line.strip() for line in kws.splitlines()]
+        return [str(k).strip() for k in kws if str(k).strip()]
+
+    def _hits_extra_keyword(self, rec: Dict[str, Any]) -> bool:
+        """识别结果是否命中用户配置的屏蔽关键词。
+
+        关键词在 **activity + content** 上匹配（模型输出的描述里会提到
+        画面中的应用/场景）。命中即按私人场景处理。
+
+        这是模型判定之外的**第二道保险**：用户可以自己指定
+        「看到 XXX 就别记」，不必完全依赖模型对场景的判断。
+        """
+        kws = self._privacy_extra_keywords()
+        if not kws:
+            return False
+        haystack = f"{rec.get('activity', '')} {rec.get('content', '')}"
+        return any(kw in haystack for kw in kws)
+
+    def _recognize_shot(self, shot) -> Optional[Dict[str, Any]]:
+        """把一张截图送去识别，并按 privacy 字段决定「记录 / 丢弃」。
+
+        这是识别逻辑的唯一出口 —— 密集抓屏循环与私人模式保底复核都走这里，
+        保证两条路径的隐私处理**完全一致**（不会出现一条记录私人、一条不记录）。
+
+        :return: 识别结果 dict（带 _at）；私人场景返回 None；出错返回 {"_error": ...}
+        """
+        if shot is None or shot.is_empty:
+            return None
         started = time.perf_counter()
         try:
             text, usage = self.llm.chat_with_image(shot.base64)
@@ -179,6 +298,31 @@ class DailyHelper:
                 "latency_ms": latency_ms,
                 "images": 1,
             })
+
+            # 私人场景：按配置决定「完全排除」「仅脱敏」还是「不处理」
+            mode = self._privacy_mode()
+            is_private = (rec.get("privacy") == PRIVACY_PRIVATE
+                          or self._hits_extra_keyword(rec))
+            if is_private and mode != PRIVACY_MODE_OFF:
+                self._last_private_check_ts = int(datetime.now().timestamp())
+                if mode == PRIVACY_MODE_EXCLUDE:
+                    self._private_mode = True
+                    self.store.insert_skip_event("private")
+                    log.info("[私人场景] 已忽略，不写入时间线")
+                    return None
+                # desensitize：写一条脱敏占位记录（私人时段仍计入工作时长）
+                log.info("[私人场景] 已脱敏，写入占位记录")
+                rec = {
+                    "activity": "私人场景",
+                    "content": "私人场景，已脱敏",
+                    "category": "其他",
+                    "privacy": PRIVACY_WORK,  # 占位记录本身要能正常写入
+                    "_at": rec.get("_at"),
+                }
+
+            # 回到工作场景：解除私人模式，之后的画面未变可以正常延长工作记录
+            self._private_mode = False
+            self._last_private_check_ts = int(datetime.now().timestamp())
             return rec
         except Exception as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)
@@ -216,7 +360,10 @@ class DailyHelper:
         :return: {recognized, created, merged}
         """
         created = merged = 0
-        valid = [rec for rec in buffer if "_error" not in rec and "_at" in rec]
+        # 过滤掉私人场景：即使某条 private 混进了 buffer，也不能写库
+        valid = [rec for rec in buffer
+                 if "_error" not in rec and "_at" in rec
+                 and rec.get("privacy") != PRIVACY_PRIVATE]
         if not valid:
             return {"recognized": len(buffer), "created": 0, "merged": 0}
         if summary_at is None:
@@ -258,6 +405,9 @@ class DailyHelper:
     def recognize_once(self, force: bool = False) -> Dict[str, Any]:
         """一次完整流程：截屏 → 识别 → 聚合 → 存储。
 
+        手动触发路径（托盘「立即识别」）。识别与隐私判定走
+        ``_recognize_shot``，与自动循环**共用同一套逻辑**。
+
         :param force: True 忽略变更检测强制识别（手动触发）
         """
         if force:
@@ -266,44 +416,34 @@ class DailyHelper:
         shot = self.capture.grab(save_to_disk=False)
         if shot.is_empty:
             # 画面没变：跳过识别（省 token），但延长上一条记录
-            latest = self.store.latest_entry()
-            if latest:
-                now = int(datetime.now().timestamp())
-                self.store.extend_entry(latest["id"], now, aggregate.MAX_DURATION)
-            self.store.insert_skip_event("unchanged")
+            if self._private_mode:
+                # 私人时段：不延长工作记录
+                self.store.insert_skip_event("private")
+            else:
+                latest = self.store.latest_entry()
+                if latest:
+                    now = int(datetime.now().timestamp())
+                    self.store.extend_entry(latest["id"], now, aggregate.MAX_DURATION)
+                self.store.insert_skip_event("unchanged")
             return {"skipped": True, "reason": "画面未变化，跳过识别"}
 
-        started = time.perf_counter()
-        try:
-            text, usage = self.llm.chat_with_image(shot.base64)
-            rec = self.llm.parse_recognition(text)
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            action, eid = aggregate.apply(
-                self.store,
-                rec["activity"],
-                rec["content"],
-                rec["category"],
-                model=self.llm.model,
-                source="screenshot",
-            )
-            self.store.insert_llm_call({
-                "model": self.llm.model,
-                "ok": True,
-                "input_tokens": usage.get("prompt_tokens", 0),
-                "output_tokens": usage.get("completion_tokens", 0),
-                "latency_ms": latency_ms,
-                "images": 1,
-            })
-            return {"ok": True, "action": action, "entry_id": eid, "recognition": rec}
-        except Exception as exc:
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            self.store.insert_llm_call({
-                "model": self.llm.model,
-                "ok": False,
-                "error": str(exc),
-                "latency_ms": latency_ms,
-            })
-            return {"ok": False, "error": str(exc)}
+        rec = self._recognize_shot(shot)
+        if rec is None:
+            # 私人场景：已丢弃，未写入任何记录
+            return {"ok": True, "action": "skipped_private", "entry_id": None,
+                    "reason": "私人场景，未写入时间线"}
+        if "_error" in rec:
+            return {"ok": False, "error": rec["_error"]}
+
+        action, eid = aggregate.apply(
+            self.store,
+            rec["activity"],
+            rec["content"],
+            rec["category"],
+            model=self.llm.model,
+            source="screenshot",
+        )
+        return {"ok": True, "action": action, "entry_id": eid, "recognition": rec}
 
     # ---------- 日报 ----------
     def generate_report(self, date: Optional[str] = None, with_ai: bool = False) -> str:

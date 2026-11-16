@@ -520,6 +520,34 @@ class RecordStore:
             )
             self._conn.commit()
 
+    def skip_events_by_day(self, date_str: str) -> List[Dict[str, Any]]:
+        """取某天的跳过事件明细（按时间倒序）。
+
+        让「没记录」可解释：画面未变（unchanged）与私人场景（private）
+        都会在这里留痕，用户能看到程序为什么没有产出记录。
+        """
+        day_start = int(datetime.fromisoformat(date_str).timestamp())
+        day_end = day_start + 86400
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, at, kind, monitors FROM skip_events "
+                "WHERE at >= ? AND at < ? ORDER BY at DESC",
+                (day_start, day_end),
+            ).fetchall()
+        return [self._to_dict(r) for r in rows]
+
+    def skip_event_counts(self, date_str: str) -> Dict[str, int]:
+        """某天各 kind 的跳过事件计数。"""
+        day_start = int(datetime.fromisoformat(date_str).timestamp())
+        day_end = day_start + 86400
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT kind, COUNT(*) AS c FROM skip_events "
+                "WHERE at >= ? AND at < ? GROUP BY kind",
+                (day_start, day_end),
+            ).fetchall()
+        return {r["kind"]: int(r["c"]) for r in rows}
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

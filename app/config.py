@@ -18,6 +18,7 @@ Spec
                     use_system_proxy / auth_type / api_username / api_password
                     price_per_1m_input / price_per_1m_output
     capture:        snap_interval / interval / quality / save_dir / region_preset
+    privacy:        mode(exclude|desensitize|off) / extra_keywords
     storage:        db_path / archive_dir / export_dir
     report:         trigger(manual|scheduled|both) / scheduled_time
     upload:         enabled / url / token / use_system_proxy
@@ -56,6 +57,15 @@ DEFAULTS: Dict[str, Any] = {
         "quality": 60,               # JPEG 质量 1-95
         "save_dir": "",              # 留空则不落盘（截图即用即弃，诚实版默认）
         "region_preset": "full",     # full / left_half / right_half / center
+    },
+    "privacy": {
+        # 私人场景处理方式：
+        #   exclude      —— 完全排除：不写库、不计入工作时长（默认，最诚实）
+        #   desensitize  —— 仅脱敏：写一条「已脱敏」占位记录（仍计入时长）
+        #   off          —— 不过滤
+        "mode": "exclude",
+        # 用户自定义的额外屏蔽关键词（每行一个），命中即判为私人场景
+        "extra_keywords": [],
     },
     "storage": {
         "db_path": "records.db",

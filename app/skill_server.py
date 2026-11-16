@@ -208,6 +208,16 @@ class SkillHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "date": date, "entries": entries})
             return
 
+        if path == "/api/skips":
+            # 跳过事件明细：让「没记录」可解释
+            # （unchanged = 画面未变；private = 私人场景，主动不记录）
+            date = (query.get("date") or [datetime.now().strftime("%Y-%m-%d")])[0]
+            events = self.store.skip_events_by_day(date) if self.store else []
+            counts = self.store.skip_event_counts(date) if self.store else {}
+            self._send_json({"ok": True, "date": date, "events": events,
+                             "counts": counts})
+            return
+
         if path == "/api/report":
             date = (query.get("date") or [datetime.now().strftime("%Y-%m-%d")])[0]
             entries = self.store.entries_by_day(date) if self.store else []

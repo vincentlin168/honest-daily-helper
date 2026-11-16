@@ -257,6 +257,22 @@
       </div>
 
       <div class="card">
+        <h2>跳过事件</h2>
+        <div class="toolbar">
+          <input type="date" id="skip-date">
+          <button class="btn secondary" onclick="loadSkips()">刷新</button>
+        </div>
+        <div class="hint" style="margin-bottom:12px">
+          <b>为什么有些时段没有记录？</b>这里给出答案：
+          <b>画面未变</b>表示屏幕像素没动（读代码/看文档时常见），那段时间仍会计入工作时长；
+          <b>私人场景</b>表示识别出私人操作（聊天/娱乐/购物等），程序<b>主动不记录</b>，
+          也不会把它算成工作时长。
+        </div>
+        <div id="skip-summary" style="margin-bottom:12px"></div>
+        <ul class="err-list" id="skip-list"><div class="empty">加载中…</div></ul>
+      </div>
+
+      <div class="card">
         <h2>错误诊断</h2>
         <div class="toolbar">
           <select id="err-days" style="padding:8px;border:1px solid var(--border);border-radius:6px">
@@ -295,6 +311,42 @@
             <option value="center">居中 1200x800</option>
           </select>
           <div class="hint">只截部分屏幕能降低图片体积与识别噪音，也更省 token</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>隐私设置</h2>
+        <div class="form-row">
+          <label>私人场景处理</label>
+          <select id="set-privacy-mode" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="exclude">完全排除（推荐）</option>
+            <option value="desensitize">仅脱敏（记录一条「已脱敏」占位）</option>
+            <option value="off">不过滤（全部记录）</option>
+          </select>
+          <div class="hint">
+            <b>完全排除</b>：识别出私人场景（私人聊天、娱乐、购物、个人事务等）时，
+            这条记录<b>不写入数据库</b>，该时段也<b>不计入工作时长</b>。
+            私人时段会在「数据 → 跳过事件」里留痕，说明「为何没记录」。
+          </div>
+          <div class="hint">
+            <b>仅脱敏</b>：仍会写入一条记录，但内容替换为「私人场景，已脱敏」，
+            私人时段会计入工作时长。
+          </div>
+          <div class="hint">
+            <b>不过滤</b>：不做任何私人场景识别（不推荐 —— 私人内容会进入时间线）。
+          </div>
+        </div>
+        <div class="form-row">
+          <label>额外屏蔽的应用/场景关键词（每行一个）</label>
+          <textarea id="set-privacy-keywords" rows="4" placeholder="例如：&#10;游戏&#10;购物&#10;视频号"></textarea>
+          <div class="hint">
+            命中这些关键词的画面会被视为私人场景并排除。
+            留空则只用内置规则判定。
+          </div>
+        </div>
+        <div class="hint" style="margin-top:4px;color:#0369a1">
+          隐私判定由视觉模型完成，程序强制执行 —— 模型说不记，就不会写进数据库。
+          这是「诚实」的一部分：不靠承诺，靠机制。
         </div>
       </div>
 
@@ -421,6 +473,7 @@
   document.getElementById('tl-date').value = today();
   document.getElementById('rp-date').value = today();
   document.getElementById('ov-date').value = today();
+  document.getElementById('skip-date').value = today();
 
   // Tab 切换
   document.querySelectorAll('.nav button').forEach(btn => {
@@ -433,7 +486,7 @@
       if (btn.dataset.tab === 'timeline') loadTimeline();
       if (btn.dataset.tab === 'overview') { loadOverview(); loadHeatmap(); }
       if (btn.dataset.tab === 'archive') loadArchive();
-      if (btn.dataset.tab === 'data') { loadErrors(); loadExportDates(); scanArchive(); loadArchivedList(); }
+      if (btn.dataset.tab === 'data') { loadErrors(); loadExportDates(); scanArchive(); loadArchivedList(); loadSkips(); }
     });
   });
 
@@ -592,7 +645,9 @@
         return;
       }
       const cats = window._categories || [];
-      list.innerHTML = data.entries.map(e => `
+      // 时间线倒序：最上面是最近的一段，最下面是最远的一段
+      const entries = [...data.entries].sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+      list.innerHTML = entries.map(e => `
         <div class="entry" id="entry-${e.id}">
           <div class="head">
             <span class="time">${esc(fmtTime(e.started_at))} - ${esc(fmtTime(e.ended_at))}</span>
@@ -906,6 +961,52 @@
   function kindOf(err) {
     if (!err) return '未知';
     return err.includes(':') ? err.split(':')[0].slice(0, 40) : err.slice(0, 40);
+  }
+
+  // 跳过事件：让「没记录」可解释
+  const SKIP_LABELS = {
+    unchanged: { text: '画面未变', hint: '屏幕像素没动（读代码/看文档时常见），这段时间仍计入工作时长' },
+    private:   { text: '私人场景', hint: '识别出私人操作（聊天/娱乐/购物等），主动不记录，也不计入工作时长' },
+  };
+
+  async function loadSkips() {
+    const date = document.getElementById('skip-date').value;
+    const sumBox = document.getElementById('skip-summary');
+    const list = document.getElementById('skip-list');
+    if (!date) return;
+    try {
+      const r = await fetch('/api/skips?date=' + date);
+      const d = await r.json();
+      if (!d.ok) { list.innerHTML = '<div class="empty">加载失败</div>'; return; }
+      const counts = d.counts || {};
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      if (!total) {
+        sumBox.innerHTML = '';
+        list.innerHTML = '<div class="empty">这一天没有跳过事件</div>';
+        return;
+      }
+      sumBox.innerHTML = `
+        <div class="stat-grid">
+          ${Object.entries(counts).map(([k, n]) => {
+            const info = SKIP_LABELS[k] || { text: k, hint: '' };
+            return `<div class="stat"><div class="label">${esc(info.text)}</div>
+                    <div class="value">${n}</div>
+                    <div class="sub">${esc(info.hint)}</div></div>`;
+          }).join('')}
+        </div>`;
+
+      const events = d.events || [];
+      list.innerHTML = events.slice(0, 200).map(e => {
+        const info = SKIP_LABELS[e.kind] || { text: e.kind };
+        return `
+        <li>
+          <span class="kind">${esc(info.text)}</span>
+          <span class="when">${esc(fmtDateTime(e.at))}</span>
+        </li>`;
+      }).join('');
+    } catch (e) {
+      list.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
   }
 
   function fmtDateTime(ts) {
@@ -1236,6 +1337,9 @@
       document.getElementById('set-price-out').value = cfg.llm?.price_per_1m_output ?? 0;
       document.getElementById('set-trigger').value = cfg.report?.trigger ?? 'both';
       document.getElementById('set-scheduled-time').value = cfg.report?.scheduled_time ?? '18:00';
+      document.getElementById('set-privacy-mode').value = cfg.privacy?.mode ?? 'exclude';
+      const privKws = cfg.privacy?.extra_keywords ?? [];
+      document.getElementById('set-privacy-keywords').value = privKws.join('\n');
       const cats = cfg.categories || [];
       document.getElementById('set-categories').value = cats.join('\n');
       window._categories = cats;
@@ -1286,6 +1390,11 @@
       report: {
         trigger: document.getElementById('set-trigger').value,
         scheduled_time: document.getElementById('set-scheduled-time').value,
+      },
+      privacy: {
+        mode: document.getElementById('set-privacy-mode').value,
+        extra_keywords: document.getElementById('set-privacy-keywords').value
+          .split('\n').map(s => s.trim()).filter(s => s),
       }
     };
     const key = document.getElementById('set-api-key').value;

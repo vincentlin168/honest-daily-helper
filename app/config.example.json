@@ -18,6 +18,10 @@
     "save_dir": "",
     "region_preset": "full"
   },
+  "privacy": {
+    "mode": "exclude",
+    "extra_keywords": []
+  },
   "storage": {
     "db_path": "records.db",
     "archive_dir": "outputs/reports",

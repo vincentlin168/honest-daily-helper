@@ -59,9 +59,77 @@ AUTH_BEARER = "bearer"
 AUTH_BASIC = "basic"
 AUTH_NONE = "none"
 
+# ---------- 隐私三态 ----------
+# 提示词与代码的共同约定：模型判断场景，程序强制执行。
+PRIVACY_WORK = "work"        # 正常工作
+PRIVACY_PARTIAL = "partial"  # 工作与私人混杂 —— 只记工作部分
+PRIVACY_PRIVATE = "private"  # 纯私人 —— 整条丢弃，不写库
+
+# 模型可能吐出的各种写法 -> 规范值
+_PRIVACY_ALIASES = {
+    "private": PRIVACY_PRIVATE,
+    "priv": PRIVACY_PRIVATE,
+    "personal": PRIVACY_PRIVATE,
+    "私人": PRIVACY_PRIVATE,
+    "partial": PRIVACY_PARTIAL,
+    "mixed": PRIVACY_PARTIAL,
+    "混杂": PRIVACY_PARTIAL,
+    "混合": PRIVACY_PARTIAL,
+    "work": PRIVACY_WORK,
+    "work_only": PRIVACY_WORK,
+    "工作": PRIVACY_WORK,
+    "": PRIVACY_WORK,
+}
+
+
+def normalize_privacy(value: Any) -> str:
+    """把模型输出的 privacy 字段规范成三态之一。
+
+    **默认返回 work**（而不是 private）：漏填或写错时宁可多记一条工作，
+    也不要误杀正常的工作记录 —— 误杀的代价（工作记录丢失）远大于
+    多记一条（内容仍由提示词要求脱敏）。
+
+    但对明确表示私人的值一律从严：只要模型说了 private / 私人，
+    就必须走「丢弃」路径，不能因为大小写或别名漏判。
+    """
+    if value is None:
+        return PRIVACY_WORK
+    text = str(value).strip().lower()
+    if not text:
+        return PRIVACY_WORK
+    if text in _PRIVACY_ALIASES:
+        return _PRIVACY_ALIASES[text]
+    # 兜底：包含 private / 私人 的都判为私人（从严）
+    if "private" in text or "私人" in text:
+        return PRIVACY_PRIVATE
+    return PRIVACY_WORK
+
 
 def build_system_prompt(categories: Optional[list] = None) -> str:
-    """生成识别 prompt（日报导向 + 脱敏设计，分类列表可动态注入）。"""
+    """生成识别 prompt（日报导向 + 脱敏设计 + 私人场景抑制）。
+
+    私人场景处理
+    ------------
+    原始设计里，私人闲聊只让模型输出「已脱敏」文本 —— 但程序**照样会写一条
+    记录进时间线**，只是内容被替换掉了。这既不是"不捕获"，
+    也会让私人时段虚增工作时长（且时间线上留下「这里有段活动」的痕迹）。
+
+    现在改成**机器可读的三态信号**：
+
+    ==============  ==========================================  ==================
+    字段取值        含义                                        程序行为
+    ==============  ==========================================  ==================
+    ``private``     纯私人场景（闲聊、娱乐、购物等）              **不写 entries**，
+                    与工作无关                                  也不计入工作时长
+    ``partial``     工作与私人混在一起                            只记工作部分，
+                    （工作群聊里夹带私聊）                        私人内容不写
+    （缺省）        正常工作场景                                  正常记录
+    ==============  ==========================================  ==================
+
+    ``private`` / ``partial`` 是**提示词与代码的共同约定**：
+    提示词负责让模型判断，代码负责强制执行 —— 模型漏判时，
+    程序仍不会把私人内容写进数据库。
+    """
     cats = categories or DEFAULT_CATEGORIES
     cat_str = "、".join(cats)
     return f"""根据当前电脑屏幕截图，记录此刻正在进行的工作活动。
@@ -70,9 +138,10 @@ def build_system_prompt(categories: Optional[list] = None) -> str:
 1. 尽可能记录有日报价值的工作内容
 2. 保留工作主题、任务名称、项目方向、需求内容、技术问题、交付物、进展、待办
 3. 保护隐私，脱敏身份信息和敏感字段，工作任务本身要尽量保留
+4. **私人场景不记录**（见下方 privacy 字段）
 
 你必须只输出一个 JSON 对象，不要输出任何其他文字，格式如下：
-{{"activity": "简短活动标签", "content": "当前具体工作任务描述", "category": "工作方向分类"}}
+{{"activity": "简短活动标签", "content": "当前具体工作任务描述", "category": "工作方向分类", "privacy": "work"}}
 
 其中 activity 是一个**稳定的活动主题标签**（概括当前工作主题，不超过 15 字，
 例如「开发日报助手工具」「撰写项目方案」，不要包含易变的细节动作），
@@ -80,6 +149,36 @@ def build_system_prompt(categories: Optional[list] = None) -> str:
 
 工作方向分类（category 必须是以下之一）：
 {cat_str}
+
+隐私字段 privacy（三选一，必须如实填写）
+--------------------------------------------------
+这是本系统最重要的字段之一，它决定了这段记录**是否会被写进数据库**。
+
+- "work"   —— 正常工作场景。默认值。
+- "partial"—— 工作与私人混在一起：工作群聊里夹带私聊、
+              工作窗口上弹出的私人消息、文档里混进的私人内容。
+              **只输出工作相关的部分**，私人内容一律不写进 activity/content。
+- "private"—— 纯私人场景，与工作完全无关。这时**必须**：
+              activity 填 "私人活动"，content 填 "私人场景，不记录"，
+              category 填 "其他"，privacy 填 "private"。
+              程序检测到 private 会**直接丢弃这条记录**，不写入数据库。
+
+判定为 private 的典型场景（这些一律不记录）：
+1. 私人聊天：微信/QQ/钉钉等与家人、朋友、同学的非工作闲聊
+2. 私人社交动态：朋友圈、视频号、公众号个人订阅、社交平台浏览
+3. 娱乐消遣：游戏、短视频、小说、直播、电影、购物、比价、秒杀
+4. 个人事务：个人账单、个人银行、个人就医、个人证件办理、
+   私人预订（机票酒店餐饮）、私人快递、公积金社保个人查询
+5. 私人通讯：私人邮件、私人快递单号查询、私人快递/外卖订单详情
+
+重要：**不要因为"看不懂内容"就判为 private**。
+只有明确属于私人范畴才用 private；拿不准时用 work 或 partial。
+
+另外，下列情况也**不要**记为 private（它们仍是工作）：
+- 工作群里的讨论、任务分派、进度同步
+- 工作工具（企业微信/飞书/钉钉）里的工作消息
+- 学习、技术调研、行业资讯、竞品分析
+- 与工作相关的社交（行业交流、招聘沟通、客户对接）
 
 你应该记录：
 1. 当前正在做的具体工作任务
@@ -93,7 +192,7 @@ def build_system_prompt(categories: Optional[list] = None) -> str:
 2. 不输出联系人昵称、群名、账号名
 3. 不输出手机号、邮箱、身份证、银行卡、地址、验证码、密码、Token、API Key、Cookie
 4. 不输出客户/员工个人身份、薪酬绩效、敏感财务明细
-5. 私人闲聊只输出「当前包含私人沟通内容，已脱敏」"""
+5. 私人场景直接按 privacy="private" 处理，不要试图描述内容"""
 
 
 def _split_url_credentials(api_base: str) -> Tuple[str, str, str]:
@@ -426,6 +525,7 @@ class LLMClient:
             "activity": raw[:15],
             "content": raw,
             "category": "其他",
+            "privacy": PRIVACY_WORK,
         }
         if not raw:
             return fallback
@@ -445,10 +545,12 @@ class LLMClient:
         activity = obj.get("activity") or obj.get("活动") or ""
         if not activity:
             activity = content[:15]  # fallback：用 content 前 15 字
+        privacy = normalize_privacy(obj.get("privacy") or obj.get("隐私"))
         return {
             "activity": str(activity).strip(),
             "content": str(content).strip(),
             "category": str(category).strip(),
+            "privacy": privacy,
         }
 
     def chat_text(self, prompt: str, max_tokens: Optional[int] = None,
