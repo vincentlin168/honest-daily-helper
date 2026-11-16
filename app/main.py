@@ -37,7 +37,6 @@ import aggregate
 from archive import ReportArchive
 from capture import Capture
 from config import Config
-from http_client import make_client
 from logging_setup import get_logger
 from llm_client import LLMClient
 from onboarding import Onboarding
@@ -87,6 +86,9 @@ class DailyHelper:
             system_prompt=llm_cfg.get("system_prompt") or None,
             categories=self.config.get("categories"),
             use_system_proxy=bool(llm_cfg.get("use_system_proxy", False)),
+            auth_type=llm_cfg.get("auth_type", "") or "",
+            api_username=llm_cfg.get("api_username", "") or "",
+            api_password=llm_cfg.get("api_password", "") or "",
         )
 
         up_cfg = self.config.get("upload", default={})
@@ -316,26 +318,8 @@ class DailyHelper:
             prompt = build_ai_prompt(stats, entries)
             try:
                 # 纯文本调用（复用 llm_client 的 OpenAI 兼容路径）
-                # trust_env=False：直连官方 API，不被系统代理静默改道
-                llm_cfg = self.config.llm_config
-                with make_client(timeout=120,
-                                 use_system_proxy=self.config.get(
-                                     "llm", "use_system_proxy", default=False)) as client:
-                    resp = client.post(
-                        f"{llm_cfg.get('api_base','').rstrip('/')}/chat/completions",
-                        headers={"Authorization": f"Bearer {llm_cfg.get('api_key','')}",
-                                 "Content-Type": "application/json"},
-                        json={
-                            "model": llm_cfg.get("model", "deepseek-flash"),
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": 0.3,
-                            "max_tokens": 1024,
-                        },
-                    )
-                if resp.status_code == 200:
-                    ai_analysis = resp.json()["choices"][0]["message"]["content"]
-                else:
-                    print(f"[日报 AI 分析失败] HTTP {resp.status_code}: {resp.text[:200]}")
+                # 认证方式（Bearer / Basic / URL 内嵌 user:pass）由 LLMClient 统一处理
+                ai_analysis = self.llm.chat_text(prompt, max_tokens=1024)
             except Exception as exc:
                 print(f"[日报 AI 分析失败] {exc}")
                 ai_analysis = None  # AI 失败回退纯模板

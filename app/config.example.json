@@ -5,6 +5,9 @@
     "model": "deepseek-flash",
     "system_prompt": "",
     "use_system_proxy": false,
+    "auth_type": "",
+    "api_username": "",
+    "api_password": "",
     "price_per_1m_input": 0.0,
     "price_per_1m_output": 0.0
   },

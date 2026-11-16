@@ -160,6 +160,8 @@ class SkillHandler(BaseHTTPRequestHandler):
                 "current": {
                     "api_base": cfg.get("llm", "api_base", default="") if cfg else "",
                     "model": cfg.get("llm", "model", default="") if cfg else "",
+                    "auth_type": cfg.get("llm", "auth_type", default="") if cfg else "",
+                    "api_username": cfg.get("llm", "api_username", default="") if cfg else "",
                     "region_preset": cfg.get("capture", "region_preset", default="full") if cfg else "full",
                     "snap_interval": cfg.get("capture", "snap_interval", default=15) if cfg else 15,
                     "categories": cfg.get("categories", default=[]) if cfg else [],
@@ -177,7 +179,12 @@ class SkillHandler(BaseHTTPRequestHandler):
                 api_base = (query.get("api_base") or [""])[0]
                 model = (query.get("model") or [""])[0]
                 api_key = (query.get("api_key") or [""])[0]
-                self._send_json({"ok": True, **ob.validate_model(api_base, model, api_key)})
+                self._send_json({"ok": True, **ob.validate_model(
+                    api_base, model, api_key,
+                    auth_type=(query.get("auth_type") or [""])[0],
+                    api_username=(query.get("api_username") or [""])[0],
+                    api_password=(query.get("api_password") or [""])[0],
+                )})
                 return
             if kind == "capture":
                 region = (query.get("region_preset") or ["full"])[0]
@@ -358,11 +365,18 @@ class SkillHandler(BaseHTTPRequestHandler):
 
             # 分步校验：任何一步不通过都不写配置，避免写出半成品
             checks = []
-            if "api_base" in body or "model" in body or "api_key" in body:
+            if ("api_base" in body or "model" in body or "api_key" in body
+                    or "auth_type" in body or "api_username" in body
+                    or "api_password" in body):
                 api_base = body.get("api_base", cfg.get("llm", "api_base", default=""))
                 model = body.get("model", cfg.get("llm", "model", default=""))
                 api_key = body.get("api_key", "")
-                res = ob.validate_model(api_base, model, api_key)
+                res = ob.validate_model(
+                    api_base, model, api_key,
+                    auth_type=body.get("auth_type", cfg.get("llm", "auth_type", default="")),
+                    api_username=body.get("api_username", cfg.get("llm", "api_username", default="")),
+                    api_password=body.get("api_password", cfg.get("llm", "api_password", default="")),
+                )
                 checks.append(res)
             if "region_preset" in body or "snap_interval" in body:
                 res = ob.validate_capture(
@@ -389,6 +403,12 @@ class SkillHandler(BaseHTTPRequestHandler):
                 cfg.set("llm", "model", body["model"])
             if body.get("api_key"):
                 cfg.set("llm", "api_key", body["api_key"])
+            if "auth_type" in body:
+                cfg.set("llm", "auth_type", body["auth_type"])
+            if body.get("api_username"):
+                cfg.set("llm", "api_username", body["api_username"])
+            if body.get("api_password"):
+                cfg.set("llm", "api_password", body["api_password"])
             if "region_preset" in body:
                 cfg.set("capture", "region_preset", body["region_preset"])
             if "snap_interval" in body:

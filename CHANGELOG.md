@@ -2,6 +2,39 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 修复
+
+- **「测试连接」假阴性（凭据热更新后仍报 401）** —— `main.py` 启动时把
+  `llm_tester=self.llm.test_connection` 直接绑给 `SkillServer`，该绑定固定住了
+  **服务启动那一刻**的 `LLMClient` 实例。用户在设置页改掉 api_key / api_base 后，
+  识别循环走被 `_reload_settings()` 重建过的 `self.llm`（用新凭据，正常），
+  而「测试连接」仍走旧实例（用旧凭据，报 401）。
+  表现为 Key 明明改对了、测试连接却仍说连不上，只能靠重启进程解决。
+  改为 `self._make_llm_tester()`，返回一个每次调用都取当前实例的可调用对象；
+  凭据变更后测试连接立即反映真实状态，**无需重启**。
+
+### 新增
+
+- **Basic 认证（URL + 密码）** —— 除 Bearer（API Key）外，支持用户名 + 密码的
+  Basic 认证，以及从 URL 内嵌的 `https://user:pass@host/v1` 自动识别。
+  三种写法等价：设置页选「Basic」填用户名密码 / 地址里内嵌凭据 / 代码传
+  `auth_type="basic"`。认证方式留空时自动判定（有 URL 内嵌凭据或用户名密码 → Basic；
+  有 Key → Bearer；都没有 → 不带认证头）。
+- **认证逻辑单一事实来源** —— 新增 `LLMClient._request_headers()`，
+  图片识别 / 连通性测试 / 日报 AI 分析三条路径共用。
+  顺手消灭了 `main.py` 日报 AI 分析里硬编码的 `Authorization: Bearer`（Basic 部署会在此失败）。
+- **URL 内嵌凭据自动剥离** —— `_split_url_credentials()` 把 `user:pass@` 从 URL 拆出，
+  凭据不再残留在 `api_base` 里，不会随 URL 出现在日志或错误信息中。
+- 设置项新增 `llm.auth_type`、`llm.api_username`、`llm.api_password`；
+  面板「模型设置」新增认证方式下拉与用户名/密码输入框，引导向导同步支持。
+- `api_password` 与 `api_key` 同等保护：面板回显掩码，且掩码值回传不覆盖真实密码。
+
+### 变更
+
+- 日报 AI 分析改用 `LLMClient.chat_text()`，与识别路径共用同一套认证与解析逻辑。
+
 ## [2.0.0] - 2026-11-16
 
 从「能跑」到「可交付」：修掉 6 处真实缺陷，补上数据可视化与成本透明度，

@@ -12,13 +12,36 @@ Spec
 4. **prompt 源自实践**：识别 prompt 为日报导向 + 脱敏设计，已提炼为内置模板。
    是「日报导向 + 脱敏」的设计。
 5. **错误可诊断**：空内容、纯文本模型（没看到图）给出明确提示。
+6. **多认证方式**：支持 Bearer（API Key）、Basic（用户名 + 密码）、无鉴权三种，
+   并可从 URL 内嵌的 ``user:pass@`` 自动识别。认证头由
+   ``_request_headers()`` 单一生成，图片识别 / 连通性测试 / 日报 AI 分析
+   三条路径共用，杜绝「一处硬编码 Bearer、另一处漏支持」的老问题。
+
+认证方式
+--------
+============  ==========================================  ==================
+配置          含义                                        生成的请求头
+============  ==========================================  ==================
+``bearer``    用 ``api_key`` 作 Bearer Token              ``Authorization: Bearer <key>``
+``basic``     用 ``api_username`` / ``api_password``      ``Authorization: Basic <base64>``
+``none``      不带任何认证头                              （无）
+``""``（自动）  URL 内嵌 ``user:pass@`` 或填了用户名密码 -> Basic；            见下
+              否则有 ``api_key`` -> Bearer；都没有 -> 无
+============  ==========================================  ==================
+
+**URL 内嵌凭据**：很多私有化部署 / 中转网关的文档给的就是
+``https://user:pass@host/v1`` 这种形式。``_split_url_credentials()``
+会把它拆成 (清洗后的 URL, 用户名, 密码)，使凭据**不会残留在 api_base 里**
+—— 否则密码会随 URL 出现在日志、错误信息或调用栈里。
 
 依赖：httpx。
 """
 
+import base64
 import json
 import re
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -29,6 +52,12 @@ DEFAULT_CATEGORIES = [
     "产品设计", "代码开发", "运营分析", "数据复盘",
     "客户支持", "项目管理", "日报整理", "资料研究", "其他",
 ]
+
+# 认证方式取值
+AUTH_AUTO = ""       # 自动判定（默认）
+AUTH_BEARER = "bearer"
+AUTH_BASIC = "basic"
+AUTH_NONE = "none"
 
 
 def build_system_prompt(categories: Optional[list] = None) -> str:
@@ -67,9 +96,36 @@ def build_system_prompt(categories: Optional[list] = None) -> str:
 5. 私人闲聊只输出「当前包含私人沟通内容，已脱敏」"""
 
 
+def _split_url_credentials(api_base: str) -> Tuple[str, str, str]:
+    """把 URL 里内嵌的 ``user:pass@`` 拆出来。
+
+    支持 ``https://user:password@host/v1`` 这种「URL + 密码」的写法 —— 很多
+    私有化部署 / 中转网关的文档给的就是这种形式。
+
+    :return: (清洗后的 URL, 用户名, 密码)
+    """
+    raw = (api_base or "").strip()
+    if not raw:
+        return "", "", ""
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return raw.rstrip("/"), "", ""
+
+    if "@" not in parts.netloc:
+        return raw.rstrip("/"), "", ""
+
+    # 只切 netloc 里 @ 之前的部分，保留 host:port
+    userinfo, _, hostport = parts.netloc.rpartition("@")
+    username, _, password = userinfo.partition(":")
+    clean_netloc = hostport
+    clean = urlunsplit((parts.scheme, clean_netloc, parts.path,
+                        parts.query, parts.fragment))
+    return clean.rstrip("/"), username, password
+
+
 class LLMClient:
     """视觉大模型客户端（OpenAI 兼容协议）。"""
-
     REQUEST_TIMEOUT = 120.0  # 视觉模型延迟高于纯文本，放宽超时
 
     # 图片识别的 token 预算。
@@ -84,13 +140,54 @@ class LLMClient:
     def __init__(self, api_base: str, api_key: str, model: str,
                  system_prompt: Optional[str] = None,
                  categories: Optional[list] = None,
-                 use_system_proxy: bool = False):
-        self.api_base = (api_base or "").rstrip("/")
+                 use_system_proxy: bool = False,
+                 auth_type: str = AUTH_AUTO,
+                 api_username: str = "",
+                 api_password: str = ""):
+        # URL 里可能内嵌 user:pass@ —— 先剥离出来，避免凭据随 URL 出现在日志里
+        self.api_base, embedded_user, embedded_pass = _split_url_credentials(api_base)
         self.api_key = api_key or ""
         self.model = model or "deepseek-flash"
         self.use_system_proxy = bool(use_system_proxy)
+
+        # basic 认证的用户名/密码：显式配置优先于 URL 内嵌
+        self.api_username = api_username or embedded_user or ""
+        self.api_password = api_password or embedded_pass or ""
+        self.auth_type = (auth_type or AUTH_AUTO).strip().lower()
+
         # 自定义 system_prompt 优先，否则按分类动态生成
         self.system_prompt = system_prompt or build_system_prompt(categories)
+
+    # ---------- 认证 ----------
+    def _resolved_auth_type(self) -> str:
+        """确定实际使用的认证方式。
+
+        显式指定 > URL 内嵌凭据 > 有 api_key 时用 Bearer > 否则不带认证头。
+        """
+        if self.auth_type in (AUTH_BEARER, AUTH_BASIC, AUTH_NONE):
+            return self.auth_type
+        # 自动：有 user:pass@ -> basic；否则有 api_key -> bearer；都没有 -> none
+        if self.api_username or self.api_password:
+            return AUTH_BASIC
+        if self.api_key:
+            return AUTH_BEARER
+        return AUTH_NONE
+
+    def _auth_headers(self) -> Dict[str, str]:
+        """构造认证请求头。"""
+        mode = self._resolved_auth_type()
+        if mode == AUTH_BASIC:
+            raw = f"{self.api_username}:{self.api_password}".encode("utf-8")
+            return {"Authorization": "Basic " + base64.b64encode(raw).decode("ascii")}
+        if mode == AUTH_BEARER and self.api_key:
+            return {"Authorization": f"Bearer {self.api_key}"}
+        return {}
+
+    def _request_headers(self) -> Dict[str, str]:
+        """完整请求头（认证 + JSON）。"""
+        headers = {"Content-Type": "application/json"}
+        headers.update(self._auth_headers())
+        return headers
 
     def _build_messages(self, image_base64: str) -> list:
         """构造 OpenAI 多模态消息体。图片只能放 user 消息的 content 数组。"""
@@ -131,10 +228,7 @@ class LLMClient:
                                  use_system_proxy=self.use_system_proxy) as client:
                     response = client.post(
                         f"{self.api_base}/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {self.api_key}",
-                            "Content-Type": "application/json",
-                        },
+                        headers=self._request_headers(),
                         json=payload,
                     )
                 if response.status_code != 200:
@@ -357,6 +451,30 @@ class LLMClient:
             "category": str(category).strip(),
         }
 
+    def chat_text(self, prompt: str, max_tokens: Optional[int] = None,
+                  temperature: float = 0.3) -> str:
+        """纯文本对话（不带图片），返回模型输出文本。
+
+        供日报 AI 分析复用 —— 走同一套认证逻辑（Bearer / Basic / URL 内嵌凭据），
+        避免在别处再写一份硬编码 ``Authorization: Bearer`` 而漏掉其它认证方式。
+        """
+        with make_client(timeout=self.REQUEST_TIMEOUT,
+                         use_system_proxy=self.use_system_proxy) as client:
+            response = client.post(
+                f"{self.api_base}/chat/completions",
+                headers=self._request_headers(),
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": temperature,
+                    "max_tokens": max_tokens or self.MAX_TOKENS_TEXT,
+                },
+            )
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"模型服务返回错误 ({response.status_code}): {response.text[:200]}")
+        return self._extract_text(response.json())
+
     def test_connection(self) -> Dict[str, Any]:
         """用纯文本探测消息测试连通性（不消耗图片 token）。
 
@@ -368,10 +486,7 @@ class LLMClient:
             with make_client(timeout=15.0, use_system_proxy=self.use_system_proxy) as client:
                 response = client.post(
                     f"{self.api_base}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=self._request_headers(),
                     json={
                         "model": self.model,
                         "messages": [{"role": "user", "content": "请只回复四个字：连接成功"}],

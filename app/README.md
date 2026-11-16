@@ -87,6 +87,9 @@ print(h.generate_report("2026-11-15", with_ai=True))
 |---|---|---|
 | `llm.api_base` | `https://api.deepseek.com/v1` | 任意 OpenAI 兼容接口 |
 | `llm.api_key` | 空 | 你的 Key，只存在本机 |
+| `llm.auth_type` | 空（自动） | `bearer` / `basic` / `none`；留空则自动判定 |
+| `llm.api_username` | 空 | Basic 认证用户名（也可用 URL 内嵌 `user:pass@`） |
+| `llm.api_password` | 空 | Basic 认证密码，只存在本机 |
 | `llm.model` | `deepseek-flash` | 需支持视觉输入 |
 | `llm.use_system_proxy` | `false` | 默认直连，不被系统代理改道 |
 | `llm.price_per_1m_input` | `0` | 每百万输入 token 价格，用于成本显示 |
@@ -98,6 +101,21 @@ print(h.generate_report("2026-11-15", with_ai=True))
 | `upload.enabled` | `false` | 数据上报默认关闭 |
 
 > 未填写单价时，概览页只显示 token 用量，**不会替你编造金额** —— 价格由你自己定。
+
+### 接入带密码的接口（URL + 密码）
+
+除了最常见的 Bearer（API Key），本项目也支持 **Basic 认证**（用户名 + 密码）。
+三种写法任选其一，效果完全相同：
+
+1. **在设置页填写**：认证方式选「Basic」，填用户名和密码
+2. **URL 内嵌凭据**：API 地址填 `https://用户名:密码@主机/v1`
+   （凭据会被自动剥离，不会随 URL 出现在日志里）
+3. **代码调用**：`LLMClient(api_base, api_key, model, auth_type="basic", api_username=..., api_password=...)`
+
+留空「认证方式」时自动判定：URL 里内嵌了 `user:pass@` 或填了用户名密码 → Basic；
+否则有 API Key → Bearer；都没有 → 不带认证头。
+
+> 密码只保存在本机 `config.json`，面板显示时做掩码处理（`sup...cret`）。
 
 ## 目录结构
 
