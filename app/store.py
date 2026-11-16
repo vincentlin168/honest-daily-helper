@@ -362,6 +362,17 @@ class RecordStore:
             return values[int(len(values) * p)]
 
         sorted_gaps = sorted(gaps)
+
+        # 修复前/后对比：用 skip_events 的最早时间做分界。
+        # 修复前画面不变就跳过（不延长记录），修复后才开始写 skip_events，
+        # 所以第一条 skip_event 的时间就是新逻辑上线的时间点。
+        # 这个对比的价值是「让用户看到修复真的有用」，而不是口头承诺。
+        split_ts = self._first_skip_ts()
+        before = after = None
+        if split_ts:
+            before = self._coverage_of(self._entries_between(start_ts, split_ts))
+            after = self._coverage_of(self._entries_between(split_ts, end_ts))
+
         return {
             "days": days,
             "recognitions": len(ats),
@@ -376,6 +387,43 @@ class RecordStore:
             "gap_p95": pct(sorted_gaps, 0.95),
             "gap_max": sorted_gaps[-1] if sorted_gaps else 0,
             "gap_over_5min": sum(1 for g in gaps if g > 300),
+            "fix_split_ts": split_ts,
+            "before_fix": before,
+            "after_fix": after,
+        }
+
+    def _first_skip_ts(self) -> Optional[int]:
+        """最早一条 skip_events 的时间 —— 即新记录逻辑上线的时间点。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MIN(at) AS m FROM skip_events").fetchone()
+        return int(row["m"]) if row and row["m"] else None
+
+    def _entries_between(self, start_ts: int, end_ts: int) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT started_at, ended_at FROM entries
+                    WHERE started_at >= ? AND started_at < ? ORDER BY started_at""",
+                (int(start_ts), int(end_ts)),
+            ).fetchall()
+        return [{"started_at": int(r["started_at"]), "ended_at": int(r["ended_at"])}
+                for r in rows]
+
+    @staticmethod
+    def _coverage_of(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """给定一批记录，算出覆盖率与零秒条目数。"""
+        if not entries:
+            return {"segments": 0, "zero_duration": 0, "coverage": 0.0,
+                    "recorded_seconds": 0, "span_seconds": 0}
+        durs = [int(e["ended_at"]) - int(e["started_at"]) for e in entries]
+        recorded = sum(durs)
+        span = int(entries[-1]["ended_at"]) - int(entries[0]["started_at"])
+        return {
+            "segments": len(entries),
+            "zero_duration": sum(1 for d in durs if d <= 0),
+            "coverage": (recorded / span) if span else 0.0,
+            "recorded_seconds": recorded,
+            "span_seconds": span,
         }
 
     # ---------- llm_calls ----------

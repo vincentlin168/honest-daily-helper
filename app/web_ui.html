@@ -541,8 +541,24 @@
         + ` · 时间线覆盖率 <b>${cov}%</b>`
         + (over ? ` · 有 <b style="color:#b91c1c">${over}</b> 处间隔超 5 分钟` : '')
         + `<br><span style="color:#64748b">覆盖率高说明工作时间基本都记下来了；`
-        + `压缩比高说明同一活动被合并得好（时间线不会被切碎）。</span>`;
+        + `压缩比高说明同一活动被合并得好（时间线不会被切碎）。</span>`
+        + fixCompareHtml(d);
     } catch (e) { box.textContent = ''; }
+  }
+
+  // 修复前后的覆盖率对比 —— 用真实数据说话，不空口承诺
+  function fixCompareHtml(d) {
+    const b = d.before_fix, a = d.after_fix;
+    if (!b || !a || !b.segments || !a.segments) return '';
+    const bc = (b.coverage * 100).toFixed(0);
+    const ac = (a.coverage * 100).toFixed(0);
+    const better = a.coverage > b.coverage;
+    return `<div style="margin-top:10px;padding:10px 12px;background:${better ? '#ecfdf5' : '#f9fafb'};border:1px solid ${better ? '#a7f3d0' : '#e5e7eb'};border-radius:6px;font-size:12px;line-height:1.8">`
+      + `<b>修复前后对比</b>（按第一条跳过记录自动分界）<br>`
+      + `修复前：${b.segments} 段 · 零秒条目 <b>${b.zero_duration}</b> 个 · 覆盖率 <b>${bc}%</b><br>`
+      + `修复后：${a.segments} 段 · 零秒条目 <b>${a.zero_duration}</b> 个 · 覆盖率 <b style="color:${better ? '#047857' : '#b91c1c'}">${ac}%</b>`
+      + (better ? ` <span style="color:#047857">↑ 工作时间不再丢失</span>` : '')
+      + `</div>`;
   }
 
   // 时间线
