@@ -19,6 +19,7 @@ Spec
 依赖：见各模块（Pillow / httpx）。
 """
 
+import os
 import sys
 import threading
 import time
@@ -39,6 +40,7 @@ from config import Config
 from http_client import make_client
 from logging_setup import get_logger
 from llm_client import LLMClient
+from onboarding import Onboarding
 from report import build_report, build_ai_prompt
 from skill_server import SkillServer
 from store import RecordStore
@@ -59,6 +61,9 @@ class DailyHelper:
         archive_dir = self.config.get("storage", "archive_dir", default="outputs/reports")
         self.archive = ReportArchive(archive_dir)
         self.export_dir = self.config.get("storage", "export_dir", default="exports")
+        # 首次运行引导
+        self.onboarding = Onboarding(self.config)
+        self.tray = None
         self._init_capture_llm()
 
     def _init_capture_llm(self) -> None:
@@ -334,6 +339,69 @@ class DailyHelper:
         return report_md
 
     # ---------- 运行 ----------
+    def _open_panel(self) -> None:
+        """打开 Web 面板（托盘菜单「打开面板」）。"""
+        url = f"http://127.0.0.1:{self.config.get('skill_server', 'port', default=8088)}"
+        try:
+            os.startfile(url)  # noqa: S606  (Windows 官方 API)
+        except Exception as exc:
+            log.warning("[打开面板失败] %s", exc)
+
+    def _capture_now(self) -> None:
+        """立即识别一次（托盘菜单「立即识别」）。"""
+        try:
+            rec = self.capture_and_recognize()
+            if rec is None:
+                log.info("[手动识别] 画面未变化，未消耗 token")
+            elif "_error" in rec:
+                log.error("[手动识别失败] %s", rec["_error"])
+            else:
+                log.info("[手动识别] %s（%s）", rec.get("content", "")[:60],
+                         rec.get("category", ""))
+        except Exception as exc:
+            log.error("[手动识别异常] %s", exc)
+
+    def _generate_report_now(self) -> None:
+        """立即生成今日日报（托盘菜单「生成日报」）。"""
+        try:
+            md = self.generate_report()
+            log.info("===== 工作日报 =====\n%s", md)
+        except Exception as exc:
+            log.error("[日报生成失败] %s", exc)
+
+    def _start_tray(self) -> None:
+        """启动系统托盘图标（失败不影响主流程）。"""
+        if not self.config.get("tray", "enabled", default=True):
+            return
+        try:
+            from tray import TrayIcon
+        except Exception as exc:
+            log.warning("[托盘不可用] %s", exc)
+            return
+        self.tray = TrayIcon(
+            title="诚实日报助手",
+            on_open=self._open_panel,
+            on_capture=self._capture_now,
+            on_report=self._generate_report_now,
+            on_exit=self._exit_requested,
+        )
+        if self.tray.start():
+            log.info("系统托盘已启动（右键图标：打开面板 / 立即识别 / 生成日报 / 退出）")
+        else:
+            log.warning("[托盘启动失败] %s", self.tray.error)
+            self.tray = None
+
+    def _exit_requested(self) -> None:
+        """托盘菜单「退出」：停掉托盘并结束进程。"""
+        log.info("收到退出指令，正在停止…")
+        try:
+            if self.tray:
+                self.tray.stop()
+        except Exception:
+            pass
+        # 结束主循环 + 进程
+        os._exit(0)
+
     def start(self) -> None:
         """启动 Skill 服务 + 定时截图循环（阻塞）。"""
         # Skill 本地服务
@@ -349,8 +417,12 @@ class DailyHelper:
                 llm_tester=self.llm.test_connection,
                 archive=self.archive,
                 export_dir=self.export_dir,
+                onboarding=self.onboarding,
             )
             threading.Thread(target=server.run, daemon=True).start()
+
+        # 系统托盘
+        self._start_tray()
 
         # 三层架构循环：密集抓屏 → 变化识别 → 定期聚合
         log.info("诚实日报助手已启动")
@@ -359,6 +431,11 @@ class DailyHelper:
                  self.config.get("capture", "snap_interval", default=15),
                  self.config.get("capture", "interval", default=120),
                  self.config.get("llm", "model", default="deepseek-flash"))
+
+        # 首次运行引导提示
+        if not self.onboarding.is_completed():
+            log.info("首次运行：请打开 http://127.0.0.1:%s 完成引导配置（填 API Key 等）",
+                     skill_cfg.get('port', 8088))
 
         buffer = []           # 攒本汇总周期内的识别结果
         last_summary = time.time()

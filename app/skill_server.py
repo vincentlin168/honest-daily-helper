@@ -28,7 +28,7 @@ import sys
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 from urllib.parse import urlparse, parse_qs
 
 import exporter
@@ -54,6 +54,7 @@ class SkillHandler(BaseHTTPRequestHandler):
     llm_tester = None         # 连通性测试回调（返回 {ok, reply|error}）
     archive = None            # ReportArchive（日报留档）
     export_dir = "exports"    # 数据导出目录
+    onboarding = None         # Onboarding（首次运行引导）
 
     def _authorized(self) -> bool:
         if not self.token:
@@ -140,6 +141,57 @@ class SkillHandler(BaseHTTPRequestHandler):
             today = datetime.now().strftime("%Y-%m-%d")
             entries = self.store.entries_by_day(today) if self.store else []
             self._send_json({"ok": True, "date": today, "entries_count": len(entries)})
+            return
+
+        # ---------- 首次运行引导 ----------
+        if path == "/api/onboarding":
+            ob = type(self).onboarding
+            if ob is None:
+                self._send_json({"ok": True, "completed": True, "steps": []})
+                return
+            cfg = type(self).config
+            self._send_json({
+                "ok": True,
+                "completed": ob.is_completed(),
+                "steps": ob.steps(),
+                "providers": ob.providers(),
+                "regions": ob.region_options(),
+                "current": {
+                    "api_base": cfg.get("llm", "api_base", default="") if cfg else "",
+                    "model": cfg.get("llm", "model", default="") if cfg else "",
+                    "region_preset": cfg.get("capture", "region_preset", default="full") if cfg else "full",
+                    "snap_interval": cfg.get("capture", "snap_interval", default=15) if cfg else 15,
+                    "categories": cfg.get("categories", default=[]) if cfg else [],
+                },
+            })
+            return
+
+        if path == "/api/onboarding/validate":
+            ob = type(self).onboarding
+            if ob is None:
+                self._send_json({"ok": True})
+                return
+            kind = (query.get("kind") or [""])[0]
+            if kind == "model":
+                api_base = (query.get("api_base") or [""])[0]
+                model = (query.get("model") or [""])[0]
+                api_key = (query.get("api_key") or [""])[0]
+                self._send_json({"ok": True, **ob.validate_model(api_base, model, api_key)})
+                return
+            if kind == "capture":
+                region = (query.get("region_preset") or ["full"])[0]
+                try:
+                    interval = int((query.get("snap_interval") or ["15"])[0])
+                except (TypeError, ValueError):
+                    interval = 15
+                self._send_json({"ok": True, **ob.validate_capture(region, interval)})
+                return
+            if kind == "categories":
+                cats = (query.get("categories") or [""])[0]
+                items = [c for c in cats.split(",") if c.strip()]
+                self._send_json({"ok": True, **ob.validate_categories(items)})
+                return
+            self._send_json({"ok": False, "error": "unknown kind"}, status=400)
             return
 
         if path == "/api/entries":
@@ -264,6 +316,76 @@ class SkillHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": str(exc)}, status=200)
             return
 
+        # ---------- 首次运行引导：应用配置并完成 ----------
+        if path == "/api/onboarding/apply":
+            ob = type(self).onboarding
+            cfg = type(self).config
+            if ob is None or cfg is None:
+                self._send_json({"ok": False, "error": "引导不可用"}, status=503)
+                return
+            body = self._read_json_body()
+
+            # 分步校验：任何一步不通过都不写配置，避免写出半成品
+            checks = []
+            if "api_base" in body or "model" in body or "api_key" in body:
+                api_base = body.get("api_base", cfg.get("llm", "api_base", default=""))
+                model = body.get("model", cfg.get("llm", "model", default=""))
+                api_key = body.get("api_key", "")
+                res = ob.validate_model(api_base, model, api_key)
+                checks.append(res)
+            if "region_preset" in body or "snap_interval" in body:
+                res = ob.validate_capture(
+                    body.get("region_preset", cfg.get("capture", "region_preset", default="full")),
+                    body.get("snap_interval", cfg.get("capture", "snap_interval", default=15)))
+                checks.append(res)
+            if "categories" in body:
+                res = ob.validate_categories(body.get("categories") or [])
+                checks.append(res)
+
+            failed = [c for c in checks if not c.get("ok")]
+            if failed:
+                problems: List[str] = []
+                for c in failed:
+                    problems.extend(c.get("problems", []))
+                self._send_json({"ok": False, "error": "；".join(problems),
+                                 "problems": problems})
+                return
+
+            # 写配置
+            if "api_base" in body:
+                cfg.set("llm", "api_base", body["api_base"])
+            if "model" in body:
+                cfg.set("llm", "model", body["model"])
+            if body.get("api_key"):
+                cfg.set("llm", "api_key", body["api_key"])
+            if "region_preset" in body:
+                cfg.set("capture", "region_preset", body["region_preset"])
+            if "snap_interval" in body:
+                cfg.set("capture", "snap_interval", int(body["snap_interval"]))
+            if "categories" in body:
+                res = ob.validate_categories(body.get("categories") or [])
+                cfg.set("categories", res.get("categories") or [])
+            cfg.save()
+
+            if body.get("finish"):
+                ob.mark_completed()
+            if type(self).settings_callback:
+                try:
+                    type(self).settings_callback()
+                except Exception:
+                    pass
+            self._send_json({"ok": True, "completed": ob.is_completed()})
+            return
+
+        if path == "/api/onboarding/skip":
+            ob = type(self).onboarding
+            if ob is None:
+                self._send_json({"ok": True})
+                return
+            ob.mark_skipped()
+            self._send_json({"ok": True, "completed": ob.is_completed()})
+            return
+
         # 手动改分类：/api/entries/{id}/category
         if path.startswith("/api/entries/") and path.endswith("/category"):
             try:
@@ -371,7 +493,8 @@ class SkillServer:
 
     def __init__(self, store, token: str = "", port: int = 8088,
                  report_builder=None, config=None, settings_callback=None,
-                 llm_tester=None, archive=None, export_dir: str = "exports"):
+                 llm_tester=None, archive=None, export_dir: str = "exports",
+                 onboarding=None):
         self.store = store
         self.port = port
         SkillHandler.store = store
@@ -382,6 +505,7 @@ class SkillServer:
         SkillHandler.llm_tester = llm_tester
         SkillHandler.archive = archive
         SkillHandler.export_dir = export_dir
+        SkillHandler.onboarding = onboarding
 
     def run(self):
         # daemon_threads=True：请求线程随主进程退出，避免关不掉

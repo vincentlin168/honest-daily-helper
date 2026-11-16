@@ -104,6 +104,29 @@
   .empty { text-align: center; color: var(--muted); padding: 40px; }
   .toast { position: fixed; top: 60px; right: 24px; background: #10b981; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity 0.3s; }
   .toast.show { opacity: 1; }
+  /* 首次运行引导 */
+  .ob-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.55); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  .ob-overlay.show { display: flex; }
+  .ob-modal { background: var(--card); border-radius: 14px; max-width: 560px; width: 100%; padding: 28px 32px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-height: 90vh; overflow-y: auto; }
+  .ob-steps { display: flex; gap: 6px; margin-bottom: 20px; }
+  .ob-steps .dot { flex: 1; height: 4px; border-radius: 2px; background: #e5e7eb; }
+  .ob-steps .dot.on { background: var(--gold); }
+  .ob-steps .dot.done { background: var(--navy-light); }
+  .ob-modal h2 { font-size: 19px; color: var(--navy); margin-bottom: 6px; }
+  .ob-modal .ob-desc { color: var(--muted); font-size: 13px; margin-bottom: 20px; line-height: 1.7; }
+  .ob-modal .form-row { margin-bottom: 14px; }
+  .ob-modal .form-row label { font-size: 13px; }
+  .ob-modal .form-row input, .ob-modal .form-row select, .ob-modal .form-row textarea { padding: 9px 12px; }
+  .ob-nav { display: flex; justify-content: space-between; align-items: center; margin-top: 22px; gap: 10px; }
+  .ob-nav .left { font-size: 12px; color: var(--muted); }
+  .ob-problems { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 14px; }
+  .ob-ok { background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 14px; }
+  .ob-pick { display: flex; flex-direction: column; gap: 8px; }
+  .ob-pick label { display: flex; gap: 10px; align-items: flex-start; padding: 11px 13px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; margin: 0; font-weight: 400; }
+  .ob-pick label:hover { border-color: var(--gold); background: #fffbeb; }
+  .ob-pick input { width: auto; margin-top: 3px; }
+  .ob-pick .t { font-weight: 600; font-size: 13px; }
+  .ob-pick .h { font-size: 12px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -326,11 +349,31 @@
 
       <div class="card">
         <button class="btn" onclick="saveSettings()" style="width:100%;padding:12px">保存设置</button>
+        <button class="btn secondary" onclick="obRestart()" style="width:100%;padding:10px;margin-top:10px">重新运行引导向导</button>
+        <div class="hint" style="margin-top:8px">想重新配置一遍？点这里会再走一遍引导流程（不会清空已有数据）</div>
       </div>
     </div>
   </div>
 
   <div class="toast" id="toast"></div>
+
+  <!-- 首次运行引导向导 -->
+  <div class="ob-overlay" id="ob-overlay">
+    <div class="ob-modal">
+      <div class="ob-steps" id="ob-steps"></div>
+      <h2 id="ob-title">欢迎使用诚实日报助手</h2>
+      <div class="ob-desc" id="ob-desc"></div>
+      <div id="ob-body"></div>
+      <div class="ob-nav">
+        <span class="left" id="ob-left"></span>
+        <div class="row-actions">
+          <button class="btn secondary" id="ob-skip" onclick="obSkip()">跳过</button>
+          <button class="btn secondary" id="ob-back" onclick="obBack()">上一步</button>
+          <button class="btn" id="ob-next" onclick="obNext()">下一步</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
 <script>
   // 初始化日期
@@ -763,6 +806,245 @@
     return html;
   }
 
+  // ============================================================
+  // 首次运行引导向导
+  // ============================================================
+  const ob = {
+    step: 0,
+    data: null,       // /api/onboarding 的返回
+    values: {},       // 用户填的值
+    providers: [],
+    regions: [],
+    lastError: null,  // 上一次保存失败的提示
+  };
+
+  async function obLoad() {
+    try {
+      const r = await fetch('/api/onboarding');
+      const d = await r.json();
+      if (!d.ok) return;
+      ob.data = d;
+      ob.providers = d.providers || [];
+      ob.regions = d.regions || [];
+      const c = d.current || {};
+      ob.values = {
+        api_base: c.api_base || '',
+        model: c.model || '',
+        api_key: '',
+        region_preset: c.region_preset || 'full',
+        snap_interval: c.snap_interval || 15,
+        categories: (c.categories || []).join('\n'),
+      };
+      if (!d.completed) {
+        ob.step = 0;
+        obRender();
+        document.getElementById('ob-overlay').classList.add('show');
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function obRender() {
+    const steps = (ob.data && ob.data.steps) || [];
+    const cur = steps[ob.step] || { title: '', desc: '' };
+    document.getElementById('ob-title').textContent = cur.title || '';
+    document.getElementById('ob-desc').textContent = cur.desc || '';
+
+    // 进度点
+    document.getElementById('ob-steps').innerHTML = steps.map((s, i) => {
+      const cls = i === ob.step ? 'on' : (i < ob.step ? 'done' : '');
+      return `<div class="dot ${cls}"></div>`;
+    }).join('');
+
+    const body = document.getElementById('ob-body');
+    const id = cur.id;
+
+    if (id === 'model') {
+      body.innerHTML = `
+        <div class="form-row">
+          <label>选择模型服务</label>
+          <div class="ob-pick">
+            ${ob.providers.map((p, i) => `
+              <label>
+                <input type="radio" name="ob-provider" value="${i}"
+                       ${ob.values.api_base === p.api_base ? 'checked' : ''}
+                       onchange="obPickProvider(${i})">
+                <span><span class="t">${esc(p.label)}</span><br>
+                <span class="h">${esc(p.api_base)} · ${esc(p.model)}</span></span>
+              </label>`).join('')}
+          </div>
+        </div>
+        <div class="form-row">
+          <label>API 地址</label>
+          <input type="text" id="ob-api-base" value="${esc(ob.values.api_base)}" oninput="ob.values.api_base=this.value">
+        </div>
+        <div class="form-row">
+          <label>模型名</label>
+          <input type="text" id="ob-model" value="${esc(ob.values.model)}" oninput="ob.values.model=this.value">
+          <div class="hint">必须支持看图（vision）。纯文本模型无法识别截图</div>
+        </div>
+        <div class="form-row">
+          <label>API Key</label>
+          <input type="password" id="ob-api-key" placeholder="粘贴你的 API Key" oninput="ob.values.api_key=this.value">
+          <div class="hint">只保存在本机 config.json，不会上传到任何地方</div>
+        </div>
+        <div id="ob-msg"></div>
+        <button class="btn secondary" id="ob-test" onclick="obTest()">测试连接</button>
+        <div class="hint" id="ob-test-out">测试用纯文本请求，不消耗图片 token</div>`;
+    } else if (id === 'capture') {
+      body.innerHTML = `
+        <div class="form-row">
+          <label>抓屏范围</label>
+          <div class="ob-pick">
+            ${ob.regions.map(r => `
+              <label>
+                <input type="radio" name="ob-region" value="${esc(r.value)}"
+                       ${ob.values.region_preset === r.value ? 'checked' : ''}
+                       onchange="ob.values.region_preset=this.value">
+                <span><span class="t">${esc(r.label)}</span><br>
+                <span class="h">${esc(r.hint)}</span></span>
+              </label>`).join('')}
+          </div>
+        </div>
+        <div class="form-row">
+          <label>抓屏间隔（秒）</label>
+          <input type="number" id="ob-snap" min="3" max="300" value="${esc(ob.values.snap_interval)}"
+                 oninput="ob.values.snap_interval=this.value">
+          <div class="hint">每隔这么久看一次屏幕。画面没变就跳过识别，不花钱</div>
+        </div>
+        <div id="ob-msg"></div>`;
+    } else if (id === 'categories') {
+      body.innerHTML = `
+        <div class="form-row">
+          <label>工作方向分类（每行一个）</label>
+          <textarea id="ob-cats" rows="8" oninput="ob.values.categories=this.value">${esc(ob.values.categories)}</textarea>
+          <div class="hint">识别时模型会从这些分类里挑最贴近的一个。之后在时间线里也能随时改</div>
+        </div>
+        <div id="ob-msg"></div>`;
+    } else {
+      body.innerHTML = `
+        <div id="ob-msg"></div>
+        <div class="ob-ok">
+          全部配置完成。接下来助手会每隔 ${esc(ob.values.snap_interval || 15)} 秒看一次屏幕，
+          识别出你在做什么，写进时间线。
+        </div>
+        <div class="hint" style="line-height:1.8">
+          · 截图只在本机内存中处理，识别完就丢弃，不落盘<br>
+          · 所有数据存在本机 SQLite，可以用「数据」页导出成开放格式<br>
+          · 托盘图标右键可随时「立即识别」「生成日报」「退出」
+        </div>`;
+    }
+
+    // 按钮状态
+    const last = ob.step === steps.length - 1;
+    document.getElementById('ob-back').style.display = ob.step === 0 ? 'none' : '';
+    document.getElementById('ob-next').textContent = last ? '完成' : '下一步';
+    document.getElementById('ob-skip').style.display = ob.step === 0 ? '' : 'none';
+    document.getElementById('ob-left').textContent = `第 ${ob.step + 1} / ${steps.length} 步`;
+
+    // 恢复上一步的错误提示（渲染会清空它）
+    if (ob.lastError) {
+      obShowMsg(ob.lastError, false);
+    }
+  }
+
+  function obPickProvider(i) {
+    const p = ob.providers[i];
+    if (!p) return;
+    ob.values.api_base = p.api_base;
+    ob.values.model = p.model;
+    obRender();
+  }
+
+  function obShowMsg(text, ok) {
+    const box = document.getElementById('ob-msg');
+    if (!box) return;
+    box.innerHTML = text ? `<div class="${ok ? 'ob-ok' : 'ob-problems'}">${esc(text)}</div>` : '';
+  }
+
+  async function obTest() {
+    const out = document.getElementById('ob-test-out');
+    const btn = document.getElementById('ob-test');
+    btn.disabled = true;
+    out.textContent = '测试中…';
+    // 先把配置写进去，测试才用得上真实 Key
+    await obApply(false);
+    try {
+      const r = await fetch('/api/llm/test', { method: 'POST' });
+      const d = await r.json();
+      if (d.ok) {
+        out.innerHTML = '<span style="color:#059669">连接成功</span> · 模型回复：' + esc(d.reply || '');
+        obShowMsg('连接成功，可以继续下一步了', true);
+      } else {
+        out.innerHTML = '<span style="color:#dc2626">连接失败</span> · ' + esc(d.error || '未知错误');
+        obShowMsg('连接失败：' + (d.error || '未知错误'), false);
+      }
+    } catch (e) {
+      out.innerHTML = '<span style="color:#dc2626">连接失败</span> · ' + esc(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function obApply(finish) {
+    const body = {
+      api_base: ob.values.api_base,
+      model: ob.values.model,
+      region_preset: ob.values.region_preset,
+      snap_interval: parseInt(ob.values.snap_interval) || 15,
+      categories: (ob.values.categories || '').split('\n').map(s => s.trim()).filter(s => s),
+    };
+    if (ob.values.api_key) body.api_key = ob.values.api_key;
+    if (finish) body.finish = true;
+    const r = await fetch('/api/onboarding/apply', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      ob.lastError = ((d.problems && d.problems.length) ? d.problems : [d.error || '保存失败']).join('；');
+      obShowMsg(ob.lastError, false);
+      return false;
+    }
+    ob.lastError = null;
+    return true;
+  }
+
+  async function obNext() {
+    const steps = (ob.data && ob.data.steps) || [];
+    if (ob.step === steps.length - 1) {
+      // 最后一步才强校验 —— 前面几步不该因为还没填 Key 就把人拦住
+      const ok = await obApply(true);
+      if (!ok) return;
+      document.getElementById('ob-overlay').classList.remove('show');
+      toast('配置完成，开始记录');
+      loadSettings();
+      return;
+    }
+    // 中间步骤：保存当前能保存的（不阻塞前进），错误提示就地显示
+    await obApply(false);
+    ob.step++;
+    obRender();
+  }
+
+  function obBack() {
+    if (ob.step > 0) { ob.step--; obRender(); }
+  }
+
+  async function obSkip() {
+    try {
+      await fetch('/api/onboarding/skip', { method: 'POST' });
+    } catch (e) { /* 忽略 */ }
+    document.getElementById('ob-overlay').classList.remove('show');
+    toast('已跳过，可在「设置」里随时配置');
+  }
+
+  function obRestart() {
+    ob.step = 0;
+    obRender();
+    document.getElementById('ob-overlay').classList.add('show');
+  }
+
   // 设置
   async function loadSettings() {
     try {
@@ -847,6 +1129,7 @@
   loadHeatmap();
   loadTimeline();
   loadSettings();
+  obLoad();
 </script>
 </body>
 </html>

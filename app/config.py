@@ -23,6 +23,7 @@ Spec
 
 import copy
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -65,6 +66,14 @@ DEFAULTS: Dict[str, Any] = {
         "enabled": True,             # Skill 本地服务（首版要做）
         "port": 8088,                # 本地 Skill 服务端口
         "token": "",                 # 鉴权 token，留空则不鉴权
+    },
+    "tray": {
+        "enabled": True,             # Windows 系统托盘常驻（右键：打开面板/立即识别/生成日报/退出）
+    },
+    "onboarding": {
+        "completed": False,          # 首次运行引导是否已完成
+        "completed_at": "",          # 完成时间（ISO 格式）
+        "skipped": False,            # 用户是否主动跳过
     },
     "categories": [
         "产品设计", "代码开发", "运营分析", "数据复盘",
@@ -115,7 +124,20 @@ class Config:
         self._data = merged
 
     def save(self, path: Optional[str] = None) -> None:
+        """保存配置。
+
+        覆盖前先备份上一份（``<name>.bak``），只保留最近一份。
+        这是为了防止「一次误写就把用户配置弄丢且无法恢复」——
+        比如引导流程写坏了 Key。
+        """
         target = Path(path) if path else self.config_path
+        try:
+            if target.exists():
+                backup = target.with_suffix(target.suffix + ".bak")
+                shutil.copy2(target, backup)
+        except Exception:
+            # 备份失败不该阻断保存
+            pass
         with open(target, "w", encoding="utf-8") as f:
             json.dump(self._data, f, ensure_ascii=False, indent=2)
 
