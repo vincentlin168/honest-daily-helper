@@ -17,6 +17,7 @@
 | 成本透明度 | 显示每日真实 API 花费 —— 你的钱花在哪，明明白白 |
 | 数据上报 | 可选，推送到你自己的服务端（默认关闭） |
 | Skill 本地服务 | 127.0.0.1:8088，Bearer Token 鉴权，供其他 Agent 查询记录/日报 |
+| MCP 工具集 | stdio 传输，18 个**只读**工具，让 AI Agent 直接查记录/日报/花费 |
 | 隐私 | 截图即用即弃、数据全本地、无授权、无联网验证 |
 
 ## 快速开始
@@ -81,6 +82,57 @@ print(h.generate_report("2026-11-15", with_ai=True))
 
 鉴权：`Authorization: Bearer <token>`（token 在 config.json 的 `skill_server.token` 配置，留空则不鉴权）。
 
+## MCP 接入（让 AI Agent 直接查你的工作记录）
+
+MCP（Model Context Protocol）让 AI Agent 直接调用你的工作记录 ——
+「我今天干了什么」「这周花了多少 API 费用」这类问题，Agent 自己就能回答。
+
+### 快速配置
+
+在 Agent 侧（如 Claude Desktop / Cursor）的 MCP 配置里加一条：
+
+```json
+{
+  "mcpServers": {
+    "honest-daily-helper": {
+      "command": "python",
+      "args": ["D:/诚实日报系统/app/mcp_server.py"]
+    }
+  }
+}
+```
+
+也可指定配置或数据库路径：
+
+```bash
+python app/mcp_server.py --config config.json --db records.db
+```
+
+### 工具清单（18 个，全部只读）
+
+| 分组 | 工具 |
+|---|---|
+| 记录查询 | `get_entries` `get_entries_range` `get_entry` `get_categories` |
+| 统计汇总 | `get_overview` `get_daily_stats` `get_top_categories` `get_heatmap` `get_interval_effectiveness` |
+| 日报相关 | `get_daily_report` `list_reports` `get_report_body` |
+| 成本诊断 | `get_token_usage` `get_cost` `get_errors` `get_error_summary` |
+| 导出归档 | `export_data` `get_status` |
+
+### 为什么是只读的
+
+MCP 让 AI 直接读你的工作记录，这件事天然让人不安。所以这个工具集的设计原则是
+**能读的都读，但读不到不该读的**：
+
+1. **结构上只读** —— 写方法在类型层面就不可达，不是靠文档约定。
+2. **无副作用** —— 不写库、不写文件、**不调 LLM**（因此不花钱）。
+   所以 `get_daily_report` 只出模板版日报；带 AI 分析的版本用
+   `get_report_body` 读主程序已留档的日报。
+3. **不碰密钥** —— 配置类信息一律不暴露。
+4. **截断诚实告知** —— 列表类工具默认最多 200 条，返回里的 `truncated`
+   字段为 `true` 表示还有更多（不会让你误以为看到的就是全部）。
+
+> 授权边界：stdio 是**进程级隔离** —— 能启动这个进程的人就是授权边界。
+
 ## 配置说明
 
 | 键 | 默认值 | 说明 |
@@ -139,11 +191,13 @@ print(h.generate_report("2026-11-15", with_ai=True))
     ├── report.py              日报生成（统计 + 模板 + AI 分析）
     ├── upload.py              数据上报（可选）
     ├── skill_server.py        Skill 本地服务 + Web UI 后端
+    ├── mcp_tools.py           MCP 工具集（18 个只读工具）
+    ├── mcp_server.py          MCP stdio 服务器（JSON-RPC 2.0）
     ├── main.py                主编排
     ├── web_ui.html            Web 界面（概览 / 时间线 / 日报 / 设置）
     ├── 启动诚实日报助手.bat     Edge 应用模式启动器
     ├── 打包.bat                一键打包 exe
-    └── tests/                 112 个单元/端到端测试
+    └── tests/                 372 个单元/端到端测试
 ```
 
 ## 运行测试

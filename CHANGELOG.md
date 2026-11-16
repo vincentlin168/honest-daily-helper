@@ -4,8 +4,29 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **MCP 工具集（只读）** —— 让 AI Agent 通过 MCP（Model Context Protocol）
+  直接查询工作记录、日报与 API 花费。新增 `app/mcp_tools.py`（18 个只读工具）
+  与 `app/mcp_server.py`（stdio 传输，JSON-RPC 2.0）。
+  - **结构上只读** —— 写方法在类型层面不可达（`ReadOnlyStore` 白名单转发），
+    不是靠文档约定「请不要调用写方法」。
+  - **无副作用** —— 不写库、不写文件、**不调 LLM**（因此不花钱）。
+    `get_daily_report` 只出模板版日报；带 AI 分析的版本用 `get_report_body`
+    读主程序已留档的日报。
+  - **截断诚实告知** —— 列表类工具默认最多 200 条，返回里的 `truncated` 字段
+    为 `true` 表示还有更多，不会让 Agent 误以为看到的就是全部。
+  - **不碰密钥** —— 配置类信息一律不暴露。
+  - 授权边界：stdio 是进程级隔离 —— 能启动该进程的人就是授权边界。
+
 ### 修复
 
+- **MCP stdio 的中文编码陷阱** —— Windows 上 `sys.__stdout__` / `sys.__stdin__`
+  的编码是系统 ANSI 代码页（简体中文环境为 GBK / cp936），而 MCP 协议规定用 UTF-8。
+  不显式指定编码时，中文工具描述与返回内容会被按 GBK 写出去，Agent 按 UTF-8
+  解析直接失败（表现为「每次调用都报 JSON 解析错误」）。
+  这个坑很隐蔽：纯 ASCII 请求一切正常，只有出现中文才炸。
+  已在 `mcp_server.py` 中显式用 UTF-8 包装输入输出流，并补中文往返的回归测试。
 - **托盘窗口类名冲突（CI 随机失败）** —— `tray.py` 用 `f"HHDTray_{pid}_{id(self)}"`
   生成窗口类名，而 CPython 的 `id()` 是内存地址、对象回收后会被复用，
   新实例可能撞上「已注册未注销」的同名类，`RegisterClassW` 报 1410
