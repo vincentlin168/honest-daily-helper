@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 # 让 print 实时输出（重定向到管道/文件时默认块缓冲，会导致看不到实时识别结果）
 for _stream in (sys.stdout, sys.stderr):
@@ -117,6 +117,26 @@ class DailyHelper:
     def _reload_settings(self) -> None:
         """设置更新后重建 capture/llm/uploader（不重建 store）。"""
         self._init_capture_llm()
+
+    def _make_llm_tester(self) -> Callable[[], Dict[str, Any]]:
+        """构造「连通性测试」回调。
+
+        必须返回一个**每次调用都取当前实例**的可调用对象，而不是直接绑定
+        ``self.llm.test_connection``。
+
+        为什么
+        ------
+        直接绑定绑定方法会把「服务启动那一刻」的 LLMClient 实例写死。
+        用户在设置页改掉 api_key / api_base 后：
+
+        * 识别循环走 ``self.llm``（已被 ``_reload_settings()`` 重建）-> 用新凭据，正常
+        * 「测试连接」走旧实例 -> 用旧凭据，报 401
+
+        表现为**假阴性**：Key 明明改对了，测试连接却仍说连不上，
+        用户只能靠重启进程解决。lambda 每次求值都读当前的 ``self.llm``，
+        因此凭据热更新后测试连接立即反映真实状态。
+        """
+        return lambda: self.llm.test_connection()
 
     # ---------- 密集抓屏三层架构 ----------
     def capture_and_recognize(self) -> Optional[Dict[str, Any]]:
@@ -414,7 +434,12 @@ class DailyHelper:
                 report_builder=build_report,
                 config=self.config,
                 settings_callback=self._reload_settings,
-                llm_tester=self.llm.test_connection,
+                # 用 _make_llm_tester() 而非直接绑定 self.llm.test_connection：
+                # 直接绑定会把「启动那一刻」的 LLMClient 实例写死，设置页改了
+                # api_key/api_base 后，识别循环用的是新客户端、而「测试连接」
+                # 仍在用旧客户端的旧凭据 —— 表现为假阴性（Key 明明改对了，
+                # 测试连接却仍报 401）。详见 _make_llm_tester 的 docstring。
+                llm_tester=self._make_llm_tester(),
                 archive=self.archive,
                 export_dir=self.export_dir,
                 onboarding=self.onboarding,
