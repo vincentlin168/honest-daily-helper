@@ -30,6 +30,52 @@
   .panel.active { display: block; }
   .card { background: var(--card); border-radius: 10px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
   .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+  /* 概览统计卡 */
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .stat { background: #f9fafb; border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .stat .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .stat .value { font-size: 20px; font-weight: 600; color: var(--navy); }
+  .stat .value.small { font-size: 15px; }
+  .stat .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .stat.accent { background: #fffbeb; border-color: #fde68a; }
+  .stat.accent .value { color: #b45309; }
+  /* 热力图 */
+  .heat-wrap { overflow-x: auto; padding-bottom: 4px; }
+  .heat { display: grid; grid-template-columns: 42px repeat(24, minmax(14px, 1fr)); gap: 2px; font-size: 10px; min-width: 420px; }
+  .heat .hd { color: var(--muted); text-align: center; line-height: 1.2; }
+  .heat .dl { color: var(--muted); display: flex; align-items: center; }
+  .heat .cell { aspect-ratio: 1 / 1; border-radius: 2px; background: #f1f5f9; }
+  .heat .cell.l1 { background: #cfe3f7; }
+  .heat .cell.l2 { background: #9ec9ef; }
+  .heat .cell.l3 { background: #5aa5dd; }
+  .heat .cell.l4 { background: #2f7fc1; }
+  .heat .cell.l5 { background: #175a8c; }
+  .heat-legend { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 11px; color: var(--muted); }
+  .heat-legend .cell { width: 14px; height: 14px; border-radius: 2px; }
+  .cat-list { list-style: none; }
+  .cat-list li { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .cat-list li:last-child { border-bottom: none; }
+  .cat-list .bar { flex: 1; height: 8px; background: #f1f5f9; border-radius: 4px; overflow: hidden; }
+  .cat-list .bar i { display: block; height: 100%; background: var(--navy-light); }
+  .cat-list .name { min-width: 90px; }
+  .cat-list .val { min-width: 80px; text-align: right; color: var(--muted); }
+  /* 错误诊断 */
+  .err-list { list-style: none; }
+  .err-list li { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .err-list li:last-child { border-bottom: none; }
+  .err-list .kind { color: #b91c1c; font-weight: 600; }
+  .err-list .when { color: var(--muted); font-size: 11px; }
+  .err-list .msg { color: #475569; font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; margin-top: 3px; }
+  /* 留档列表 */
+  .arch-list { list-style: none; }
+  .arch-list li { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .arch-list li:last-child { border-bottom: none; }
+  .arch-list .d { font-weight: 600; min-width: 90px; }
+  .arch-list .p { color: var(--muted); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .arch-list .sz { color: var(--muted); font-size: 11px; }
+  /* 导出预览 */
+  .export-out { width: 100%; height: 320px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: #f9fafb; resize: vertical; }
+  .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
   .toolbar input[type=date] { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
   .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; background: var(--gold); color: #fff; font-weight: 500; }
@@ -58,6 +104,29 @@
   .empty { text-align: center; color: var(--muted); padding: 40px; }
   .toast { position: fixed; top: 60px; right: 24px; background: #10b981; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity 0.3s; }
   .toast.show { opacity: 1; }
+  /* 首次运行引导 */
+  .ob-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.55); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  .ob-overlay.show { display: flex; }
+  .ob-modal { background: var(--card); border-radius: 14px; max-width: 560px; width: 100%; padding: 28px 32px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-height: 90vh; overflow-y: auto; }
+  .ob-steps { display: flex; gap: 6px; margin-bottom: 20px; }
+  .ob-steps .dot { flex: 1; height: 4px; border-radius: 2px; background: #e5e7eb; }
+  .ob-steps .dot.on { background: var(--gold); }
+  .ob-steps .dot.done { background: var(--navy-light); }
+  .ob-modal h2 { font-size: 19px; color: var(--navy); margin-bottom: 6px; }
+  .ob-modal .ob-desc { color: var(--muted); font-size: 13px; margin-bottom: 20px; line-height: 1.7; }
+  .ob-modal .form-row { margin-bottom: 14px; }
+  .ob-modal .form-row label { font-size: 13px; }
+  .ob-modal .form-row input, .ob-modal .form-row select, .ob-modal .form-row textarea { padding: 9px 12px; }
+  .ob-nav { display: flex; justify-content: space-between; align-items: center; margin-top: 22px; gap: 10px; }
+  .ob-nav .left { font-size: 12px; color: var(--muted); }
+  .ob-problems { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 14px; }
+  .ob-ok { background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 14px; }
+  .ob-pick { display: flex; flex-direction: column; gap: 8px; }
+  .ob-pick label { display: flex; gap: 10px; align-items: flex-start; padding: 11px 13px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; margin: 0; font-weight: 400; }
+  .ob-pick label:hover { border-color: var(--gold); background: #fffbeb; }
+  .ob-pick input { width: auto; margin-top: 3px; }
+  .ob-pick .t { font-weight: 600; font-size: 13px; }
+  .ob-pick .h { font-size: 12px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -66,14 +135,49 @@
     <div class="status"><span class="dot"></span>本地运行 · 数据不出本机</div>
   </div>
   <div class="nav">
-    <button data-tab="timeline" class="active">时间线</button>
+    <button data-tab="overview" class="active">概览</button>
+    <button data-tab="timeline">时间线</button>
     <button data-tab="report">日报</button>
+    <button data-tab="archive">留档</button>
+    <button data-tab="data">数据</button>
     <button data-tab="settings">设置</button>
   </div>
 
   <div class="container">
+    <!-- 概览 -->
+    <div id="overview" class="panel active">
+      <div class="card">
+        <div class="toolbar">
+          <input type="date" id="ov-date">
+          <button class="btn secondary" onclick="loadOverview()">刷新</button>
+        </div>
+        <div class="stat-grid" id="ov-stats"><div class="empty">加载中…</div></div>
+      </div>
+
+      <div class="card">
+        <h2>工作热力图</h2>
+        <div id="ov-heat"><div class="empty">加载中…</div></div>
+        <div class="heat-legend">
+          <span>少</span>
+          <span class="cell" style="background:#f1f5f9"></span>
+          <span class="cell" style="background:#cfe3f7"></span>
+          <span class="cell" style="background:#9ec9ef"></span>
+          <span class="cell" style="background:#5aa5dd"></span>
+          <span class="cell" style="background:#2f7fc1"></span>
+          <span class="cell" style="background:#175a8c"></span>
+          <span>多</span>
+          <span style="margin-left:8px">每格 = 该小时的活跃时长</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>精力分布</h2>
+        <ul class="cat-list" id="ov-cats"><div class="empty">加载中…</div></ul>
+      </div>
+    </div>
+
     <!-- 时间线 -->
-    <div id="timeline" class="panel active">
+    <div id="timeline" class="panel">
       <div class="card">
         <div class="toolbar">
           <input type="date" id="tl-date">
@@ -95,14 +199,92 @@
       </div>
     </div>
 
+    <!-- 留档 -->
+    <div id="archive" class="panel">
+      <div class="card">
+        <h2>日报留档</h2>
+        <div class="hint" style="margin-bottom:12px">每次生成日报都会在这里存一份 Markdown 文件，随时可用编辑器打开、拷进笔记软件或邮件</div>
+        <ul class="arch-list" id="arch-list"><div class="empty">加载中…</div></ul>
+      </div>
+      <div class="card">
+        <h2>留档内容</h2>
+        <input type="date" id="arch-date" style="margin-bottom:10px">
+        <button class="btn secondary" onclick="loadArchiveBody()">查看</button>
+        <div id="arch-body" style="margin-top:12px"><div class="empty">选择日期查看留档内容</div></div>
+      </div>
+    </div>
+
+    <!-- 数据（导出 + 错误诊断） -->
+    <div id="data" class="panel">
+      <div class="card">
+        <h2>导出我的数据</h2>
+        <div class="hint" style="margin-bottom:12px">
+          你的数据属于你自己。导出成开放格式（JSON / Markdown / CSV），不带任何厂商格式、不加密、不联网。
+          这样你随时能换工具、自己分析、或者只是备份。
+        </div>
+        <div class="row-actions" style="margin-bottom:12px">
+          <select id="exp-date" style="padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="">全部记录（最近 90 天）</option>
+          </select>
+          <select id="exp-format" style="padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="json">JSON（程序分析）</option>
+            <option value="md">Markdown（可读）</option>
+            <option value="csv">CSV（表格）</option>
+          </select>
+          <button class="btn secondary" onclick="previewExport()">预览</button>
+          <button class="btn" onclick="saveExport()">导出到文件</button>
+        </div>
+        <textarea class="export-out" id="exp-preview" readonly placeholder="点「预览」查看导出内容"></textarea>
+        <div class="hint" style="margin-top:8px">导出文件保存在 exports/ 目录</div>
+      </div>
+
+      <div class="card">
+        <h2>历史数据归档</h2>
+        <div class="hint" style="margin-bottom:12px">
+          v2 修复了「静态屏幕遗漏」和「零秒条目」两个缺陷。修复前积累的记录带着这些缺陷 ——
+          时长为 0，会让总时长被低估、时间线被切碎。归档把它们移走，让统计只反映修复后的真实数据。
+          <b>一条都不会丢</b>，随时可以恢复或导出。
+        </div>
+        <div id="arch-scan" style="margin-bottom:12px"></div>
+        <div class="row-actions" style="margin-bottom:12px">
+          <button class="btn secondary" onclick="scanArchive()">扫描</button>
+          <button class="btn" onclick="runArchive()" id="btn-run-archive">执行归档</button>
+          <button class="btn secondary" onclick="restoreArchive()">恢复全部</button>
+          <button class="btn secondary" onclick="exportArchived()">导出归档</button>
+        </div>
+        <div id="arch-result"></div>
+        <ul class="arch-list" id="arch-archived-list"></ul>
+      </div>
+
+      <div class="card">
+        <h2>错误诊断</h2>
+        <div class="toolbar">
+          <select id="err-days" style="padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="1">今天</option>
+            <option value="7" selected>最近 7 天</option>
+            <option value="30">最近 30 天</option>
+          </select>
+          <button class="btn secondary" onclick="loadErrors()">刷新</button>
+        </div>
+        <div id="err-summary" style="margin-bottom:14px"></div>
+        <ul class="err-list" id="err-list"><div class="empty">加载中…</div></ul>
+      </div>
+    </div>
+
     <!-- 设置 -->
     <div id="settings" class="panel">
       <div class="card">
         <h2>截屏设置</h2>
         <div class="form-row">
-          <label>截屏间隔（秒）</label>
-          <input type="number" id="set-interval" min="10" value="120">
-          <div class="hint">画面不变时会自动跳过识别，不消耗 token，间隔可以设小一些</div>
+          <label>抓屏间隔（秒）</label>
+          <input type="number" id="set-snap-interval" min="3" max="300" value="15">
+          <div class="hint">每隔这么久抓一次屏并比对像素。这一步不发网络请求、不消耗 token。屏幕像素不变时会跳过识别，但工作时间仍会计入时间线</div>
+        </div>
+        <div class="form-row">
+          <label>汇总写入周期（秒）</label>
+          <input type="number" id="set-interval" min="30" max="3600" value="120">
+          <div class="hint">识别结果攒够这个周期后才写进时间线。它主要影响「写入延迟」，对活动段数的影响比想象中小（合并与否取决于活动措辞的相似度）</div>
+          <div class="hint" id="interval-effect" style="margin-top:6px;color:#0369a1"></div>
         </div>
         <div class="form-row">
           <label>区域预设</label>
@@ -112,6 +294,7 @@
             <option value="right_half">右半屏</option>
             <option value="center">居中 1200x800</option>
           </select>
+          <div class="hint">只截部分屏幕能降低图片体积与识别噪音，也更省 token</div>
         </div>
       </div>
 
@@ -147,6 +330,23 @@
           <input type="password" id="set-api-key" placeholder="留空表示不修改">
           <div class="hint">Key 只保存在本机 config.json，不回显明文</div>
         </div>
+        <div class="form-row">
+          <button class="btn secondary" id="btn-test-llm" onclick="testLLM()">测试连接</button>
+          <div class="hint" id="llm-test-result">验证 Key、模型名与网络是否可用（用纯文本请求，不消耗图片 token）</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>成本透明度</h2>
+        <div class="form-row">
+          <label>输入价格（元 / 百万 token）</label>
+          <input type="number" id="set-price-in" min="0" step="0.01" value="0">
+        </div>
+        <div class="form-row">
+          <label>输出价格（元 / 百万 token）</label>
+          <input type="number" id="set-price-out" min="0" step="0.01" value="0">
+        </div>
+        <div class="hint">按你自己模型的实际单价填写，概览页会显示每日真实花费。填 0 则只显示 token 用量，不显示金额 —— 软件不会替你假定价格</div>
       </div>
 
       <div class="card">
@@ -167,11 +367,31 @@
 
       <div class="card">
         <button class="btn" onclick="saveSettings()" style="width:100%;padding:12px">保存设置</button>
+        <button class="btn secondary" onclick="obRestart()" style="width:100%;padding:10px;margin-top:10px">重新运行引导向导</button>
+        <div class="hint" style="margin-top:8px">想重新配置一遍？点这里会再走一遍引导流程（不会清空已有数据）</div>
       </div>
     </div>
   </div>
 
   <div class="toast" id="toast"></div>
+
+  <!-- 首次运行引导向导 -->
+  <div class="ob-overlay" id="ob-overlay">
+    <div class="ob-modal">
+      <div class="ob-steps" id="ob-steps"></div>
+      <h2 id="ob-title">欢迎使用诚实日报助手</h2>
+      <div class="ob-desc" id="ob-desc"></div>
+      <div id="ob-body"></div>
+      <div class="ob-nav">
+        <span class="left" id="ob-left"></span>
+        <div class="row-actions">
+          <button class="btn secondary" id="ob-skip" onclick="obSkip()">跳过</button>
+          <button class="btn secondary" id="ob-back" onclick="obBack()">上一步</button>
+          <button class="btn" id="ob-next" onclick="obNext()">下一步</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
 <script>
   // 初始化日期
@@ -181,6 +401,7 @@
   }
   document.getElementById('tl-date').value = today();
   document.getElementById('rp-date').value = today();
+  document.getElementById('ov-date').value = today();
 
   // Tab 切换
   document.querySelectorAll('.nav button').forEach(btn => {
@@ -189,8 +410,11 @@
       document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById(btn.dataset.tab).classList.add('active');
-      if (btn.dataset.tab === 'settings') loadSettings();
+      if (btn.dataset.tab === 'settings') { loadSettings(); loadIntervalEffect(); }
       if (btn.dataset.tab === 'timeline') loadTimeline();
+      if (btn.dataset.tab === 'overview') { loadOverview(); loadHeatmap(); }
+      if (btn.dataset.tab === 'archive') loadArchive();
+      if (btn.dataset.tab === 'data') { loadErrors(); loadExportDates(); scanArchive(); loadArchivedList(); }
     });
   });
 
@@ -203,6 +427,122 @@
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+
+  // 概览
+  async function loadOverview() {
+    const date = document.getElementById('ov-date').value;
+    const box = document.getElementById('ov-stats');
+    const cats = document.getElementById('ov-cats');
+    try {
+      const r = await fetch('/api/overview?date=' + date);
+      const d = await r.json();
+      if (!d.ok) { box.innerHTML = '<div class="empty">加载失败</div>'; return; }
+
+      const cost = d.cost || {};
+      const costText = cost.has_price
+        ? '¥' + (cost.cost || 0).toFixed(4)
+        : '未设置单价';
+
+      const cards = [
+        { label: '活动段数', value: d.total_segments, sub: d.start_time ? d.start_time + ' - ' + d.end_time : '无记录' },
+        { label: '总时长', value: d.total_duration_text, sub: d.max_gap_text ? '最长空档 ' + d.max_gap_text : '' },
+        { label: '最长连续工作', value: d.longest_continuous_text, sub: d.longest_continuous_count + ' 段相连' },
+        { label: '最活跃时段', value: d.peak_window || '—', sub: d.category_count + ' 个分类' },
+        { label: '识别调用', value: d.llm_calls, sub: d.llm_failures ? d.llm_failures + ' 次失败' : '全部成功' },
+        { label: 'Token 用量', value: (cost.input_tokens + cost.output_tokens).toLocaleString(), sub: '输入 ' + cost.input_tokens + ' / 输出 ' + cost.output_tokens },
+      ];
+
+      box.innerHTML = cards.map(c => `
+        <div class="stat">
+          <div class="label">${esc(c.label)}</div>
+          <div class="value${String(c.value).length > 8 ? ' small' : ''}">${esc(c.value)}</div>
+          ${c.sub ? `<div class="sub">${esc(c.sub)}</div>` : ''}
+        </div>`).join('')
+        + `<div class="stat accent">
+            <div class="label">今日 API 花费</div>
+            <div class="value small">${esc(costText)}</div>
+            <div class="sub">${cost.has_price ? '按你填写的单价换算' : '在设置里填写模型单价后显示'}</div>
+          </div>`;
+
+      // 精力分布
+      const top = d.top_categories || [];
+      if (!top.length) {
+        cats.innerHTML = '<div class="empty">这一天还没有工作记录</div>';
+      } else {
+        const max = Math.max(...top.map(t => t.duration)) || 1;
+        cats.innerHTML = top.map(t => `
+          <li>
+            <span class="name">${esc(t.name)}</span>
+            <span class="bar"><i style="width:${Math.round(t.duration / max * 100)}%"></i></span>
+            <span class="val">${esc(t.text)}</span>
+          </li>`).join('');
+      }
+    } catch (e) {
+      box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  // 热力图
+  async function loadHeatmap() {
+    const box = document.getElementById('ov-heat');
+    try {
+      const r = await fetch('/api/heatmap?days=7');
+      const d = await r.json();
+      if (!d.ok || !d.grid || !d.grid.length) { box.innerHTML = '<div class="empty">暂无数据</div>'; return; }
+
+      const WD = ['一', '二', '三', '四', '五', '六', '日'];
+      let html = '<div class="heat-wrap"><div class="heat">';
+      html += '<div class="hd"></div>';
+      for (let h = 0; h < 24; h++) {
+        html += '<div class="hd">' + (h % 3 === 0 ? h : '') + '</div>';
+      }
+      for (const row of d.grid) {
+        html += '<div class="dl">' + WD[row.weekday] + '</div>';
+        for (const secs of row.hours) {
+          html += '<div class="cell ' + heatLevel(secs) + '" title="' + row.date + ' ' + (secs/60).toFixed(0) + ' 分钟"></div>';
+        }
+      }
+      html += '</div></div>';
+      box.innerHTML = html;
+    } catch (e) {
+      box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  function heatLevel(secs) {
+    if (!secs) return '';
+    const mins = secs / 60;
+    if (mins >= 45) return 'l5';
+    if (mins >= 30) return 'l4';
+    if (mins >= 20) return 'l3';
+    if (mins >= 10) return 'l2';
+    return 'l1';
+  }
+
+  // 抓屏间隔 / 汇总周期的实测效果（诚实数据：真实测量，不空口承诺）
+  async function loadIntervalEffect() {
+    const box = document.getElementById('interval-effect');
+    if (!box) return;
+    try {
+      const r = await fetch('/api/intervals?days=7');
+      const d = await r.json();
+      if (!d.ok) { box.textContent = ''; return; }
+      const cov = (d.coverage * 100).toFixed(0);
+      const comp = d.compression ? d.compression.toFixed(1) : '—';
+      const snap = d.configured_snap_interval ?? '—';
+      const sum = d.configured_summary_interval ?? '—';
+      const median = d.gap_median;
+      const over = d.gap_over_5min;
+      box.innerHTML =
+        `实测（近 7 天）：识别 <b>${d.recognitions}</b> 次 / 活动段 <b>${d.segments}</b> 段`
+        + ` · 聚合压缩比 <b>${comp}</b>:1`
+        + ` · 实际间隔中位 <b>${median}s</b>（配置 ${snap}s）`
+        + ` · 时间线覆盖率 <b>${cov}%</b>`
+        + (over ? ` · 有 <b style="color:#b91c1c">${over}</b> 处间隔超 5 分钟` : '')
+        + `<br><span style="color:#64748b">覆盖率高说明工作时间基本都记下来了；`
+        + `压缩比高说明同一活动被合并得好（时间线不会被切碎）。</span>`;
+    } catch (e) { box.textContent = ''; }
   }
 
   // 时间线
@@ -218,16 +558,32 @@
       }
       const cats = window._categories || [];
       list.innerHTML = data.entries.map(e => `
-        <div class="entry">
+        <div class="entry" id="entry-${e.id}">
           <div class="head">
             <span class="time">${esc(fmtTime(e.started_at))} - ${esc(fmtTime(e.ended_at))}</span>
-            <span class="activity">${esc(e.activity || e.content || '')}</span>
+            <span class="activity" id="act-${e.id}">${esc(e.activity || e.content || '')}</span>
             <select class="cat-select" onchange="changeCategory(${e.id}, this.value)">
               ${cats.map(c => `<option value="${esc(c)}" ${c===e.category?'selected':''}>${esc(c)}</option>`).join('')}
               ${!cats.includes(e.category) ? `<option value="${esc(e.category)}" selected>${esc(e.category)}</option>` : ''}
             </select>
+            <button class="btn secondary" style="padding:3px 8px;font-size:11px" onclick="editEntry(${e.id})">编辑</button>
+            <button class="btn secondary" style="padding:3px 8px;font-size:11px" onclick="deleteEntry(${e.id})">删除</button>
           </div>
-          <div class="content">${esc(e.content)}</div>
+          <div class="content" id="cnt-${e.id}">${esc(e.content)}</div>
+          <div class="edit-box" id="edit-${e.id}" style="display:none;margin-top:8px">
+            <div class="form-row">
+              <label>活动</label>
+              <input type="text" id="edit-act-${e.id}" value="${esc(e.activity || '')}">
+            </div>
+            <div class="form-row">
+              <label>内容</label>
+              <textarea id="edit-cnt-${e.id}" rows="3">${esc(e.content)}</textarea>
+            </div>
+            <div class="row-actions">
+              <button class="btn" onclick="saveEntry(${e.id})">保存</button>
+              <button class="btn secondary" onclick="toggleEdit(${e.id})">取消</button>
+            </div>
+          </div>
         </div>`).join('');
     } catch (e) {
       list.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
@@ -248,6 +604,279 @@
       });
       toast('分类已更新');
     } catch (e) { toast('更新失败'); }
+  }
+
+  // 编辑 / 删除记录
+  function toggleEdit(id) {
+    const box = document.getElementById('edit-' + id);
+    if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  }
+
+  function editEntry(id) { toggleEdit(id); }
+
+  async function saveEntry(id) {
+    const activity = document.getElementById('edit-act-' + id).value;
+    const content = document.getElementById('edit-cnt-' + id).value;
+    try {
+      const r = await fetch('/api/entries/' + id, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({activity: activity, content: content})
+      });
+      const d = await r.json();
+      if (!d.ok) { toast('保存失败：' + (d.error || '未知错误')); return; }
+      document.getElementById('act-' + id).textContent = activity;
+      document.getElementById('cnt-' + id).textContent = content;
+      toggleEdit(id);
+      toast('已保存');
+      loadOverview();
+    } catch (e) { toast('保存失败：' + e.message); }
+  }
+
+  async function deleteEntry(id) {
+    if (!confirm('确定删除这条记录？删除后无法恢复。')) return;
+    try {
+      const r = await fetch('/api/entries/' + id + '/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+      });
+      const d = await r.json();
+      if (!d.ok) { toast('删除失败'); return; }
+      const el = document.getElementById('entry-' + id);
+      if (el) el.remove();
+      toast('已删除');
+      loadOverview();
+    } catch (e) { toast('删除失败：' + e.message); }
+  }
+
+  // 日报留档
+  async function loadArchive() {
+    const box = document.getElementById('arch-list');
+    try {
+      const r = await fetch('/api/archive');
+      const d = await r.json();
+      if (!d.reports || !d.reports.length) {
+        box.innerHTML = '<div class="empty">还没有留档。生成一次日报就会自动存档</div>';
+        return;
+      }
+      box.innerHTML = d.reports.map(item => `
+        <li>
+          <span class="d">${esc(item.date)}</span>
+          <span class="p" title="${esc(item.path)}">${esc(item.file)}</span>
+          <span class="sz">${Math.round(item.size/1024*10)/10} KB</span>
+          <button class="btn secondary" style="padding:3px 8px;font-size:11px" onclick="viewArchive('${esc(item.date)}')">查看</button>
+        </li>`).join('');
+      const sel = document.getElementById('arch-date');
+      if (!sel.value && d.reports.length) sel.value = d.reports[0].date;
+    } catch (e) {
+      box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function viewArchive(date) {
+    document.getElementById('arch-date').value = date;
+    loadArchiveBody();
+  }
+
+  async function loadArchiveBody() {
+    const date = document.getElementById('arch-date').value;
+    const box = document.getElementById('arch-body');
+    if (!date) { box.innerHTML = '<div class="empty">选择日期查看留档内容</div>'; return; }
+    try {
+      const r = await fetch('/api/archive/body?date=' + date);
+      const d = await r.json();
+      if (!d.ok) { box.innerHTML = '<div class="empty">' + esc(d.error || '没有该日期的留档') + '</div>'; return; }
+      box.innerHTML = '<pre style="white-space:pre-wrap;font-size:13px;line-height:1.6">' + esc(d.report) + '</pre>';
+    } catch (e) {
+      box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  // 数据导出
+  async function loadExportDates() {
+    const sel = document.getElementById('exp-date');
+    if (sel.dataset.loaded) return;
+    try {
+      const r = await fetch('/api/archive');
+      const d = await r.json();
+      const dates = (d.reports || []).map(x => x.date);
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">全部记录（最近 90 天）</option>' +
+        dates.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+      sel.value = cur;
+      sel.dataset.loaded = '1';
+    } catch (e) { /* 忽略 */ }
+  }
+
+  async function previewExport() {
+    const date = document.getElementById('exp-date').value;
+    const format = document.getElementById('exp-format').value;
+    const box = document.getElementById('exp-preview');
+    box.value = '生成中…';
+    try {
+      const r = await fetch(`/api/export/preview?date=${date}&format=${format}`);
+      const d = await r.json();
+      if (!d.ok) { box.value = '失败：' + (d.error || '未知错误'); return; }
+      box.value = d.content;
+      toast(d.count + ' 条记录');
+    } catch (e) { box.value = '失败：' + e.message; }
+  }
+
+  async function saveExport() {
+    const date = document.getElementById('exp-date').value;
+    const format = document.getElementById('exp-format').value;
+    try {
+      const r = await fetch('/api/export', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({date: date, format: format})
+      });
+      const d = await r.json();
+      if (!d.ok) { toast('导出失败：' + (d.error || '未知错误')); return; }
+      toast(d.message);
+    } catch (e) { toast('导出失败：' + e.message); }
+  }
+
+  // 历史数据归档
+  async function scanArchive() {
+    const box = document.getElementById('arch-scan');
+    box.innerHTML = '<div class="empty">扫描中…</div>';
+    try {
+      const r = await fetch('/api/data/archive/scan');
+      const d = await r.json();
+      if (!d.ok) { box.innerHTML = '<div class="empty">扫描失败</div>'; return; }
+      const pct = d.defective_pct.toFixed(1);
+      box.innerHTML = `
+        <div class="stat-grid">
+          <div class="stat"><div class="label">扫描记录</div><div class="value">${d.total_scanned}</div></div>
+          <div class="stat ${d.defective ? 'accent' : ''}">
+            <div class="label">有缺陷（零秒）</div>
+            <div class="value">${d.defective}</div>
+            <div class="sub">占 ${pct}%</div>
+          </div>
+          <div class="stat"><div class="label">正常记录</div><div class="value">${d.healthy}</div></div>
+        </div>`;
+    } catch (e) {
+      box.innerHTML = '<div class="empty">扫描失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function runArchive() {
+    const res = document.getElementById('arch-result');
+    if (!confirm('把有缺陷的零秒记录移入归档区？\n\n记录不会被删除，随时可以恢复或导出。')) return;
+    res.innerHTML = '<div class="empty">归档中…</div>';
+    try {
+      const r = await fetch('/api/data/archive/run', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({dry_run: false})
+      });
+      const d = await r.json();
+      if (!d.ok) { res.innerHTML = '<div class="empty">归档失败：' + esc(d.error || '') + '</div>'; return; }
+      res.innerHTML = `<div class="ob-ok">已归档 ${d.archived} 条有缺陷记录。剩余正常记录 ${d.healthy} 条。</div>`;
+      scanArchive();
+      loadArchivedList();
+      loadOverview();
+    } catch (e) {
+      res.innerHTML = '<div class="empty">归档失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function restoreArchive() {
+    const res = document.getElementById('arch-result');
+    if (!confirm('把所有归档记录搬回时间线？')) return;
+    res.innerHTML = '<div class="empty">恢复中…</div>';
+    try {
+      const r = await fetch('/api/data/archive/restore', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+      });
+      const d = await r.json();
+      if (!d.ok) { res.innerHTML = '<div class="empty">恢复失败</div>'; return; }
+      res.innerHTML = `<div class="ob-ok">已恢复 ${d.restored} 条记录${d.skipped ? '（' + d.skipped + ' 条因 ID 冲突跳过）' : ''}。</div>`;
+      scanArchive();
+      loadArchivedList();
+      loadOverview();
+    } catch (e) {
+      res.innerHTML = '<div class="empty">恢复失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function exportArchived() {
+    const res = document.getElementById('arch-result');
+    try {
+      const r = await fetch('/api/data/archive/export');
+      const d = await r.json();
+      if (!d.ok) { res.innerHTML = '<div class="empty">导出失败</div>'; return; }
+      res.innerHTML = `<div class="ob-ok">已导出 ${d.count} 条归档记录到 ${esc(d.path)}</div>`;
+    } catch (e) {
+      res.innerHTML = '<div class="empty">导出失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function loadArchivedList() {
+    const list = document.getElementById('arch-archived-list');
+    if (!list) return;
+    try {
+      const r = await fetch('/api/data/archive/list?limit=50');
+      const d = await r.json();
+      if (!d.ok) { list.innerHTML = ''; return; }
+      if (!d.total) { list.innerHTML = '<div class="empty">还没有归档记录</div>'; return; }
+      list.innerHTML = `<div class="hint" style="margin-bottom:8px">共 ${d.total} 条，显示最近 50 条</div>` +
+        d.entries.map(e => `
+          <li>
+            <span class="d">${esc(fmtDateTime(e.started_at))}</span>
+            <span class="p" title="${esc(e.content)}">${esc(e.activity || e.content || '')}</span>
+            <span class="sz">${esc(e.archive_reason || '')}</span>
+          </li>`).join('');
+    } catch (e) { list.innerHTML = ''; }
+  }
+
+  // 错误诊断
+  async function loadErrors() {
+    const days = document.getElementById('err-days').value;
+    const sumBox = document.getElementById('err-summary');
+    const list = document.getElementById('err-list');
+    try {
+      const r = await fetch('/api/errors?days=' + days);
+      const d = await r.json();
+      if (!d.ok) { list.innerHTML = '<div class="empty">加载失败</div>'; return; }
+
+      const rate = ((d.error_rate || 0) * 100).toFixed(1);
+      sumBox.innerHTML = `
+        <div class="stat-grid">
+          <div class="stat"><div class="label">调用总数</div><div class="value">${d.total_calls}</div></div>
+          <div class="stat ${d.total_errors ? 'accent' : ''}"><div class="label">失败次数</div><div class="value">${d.total_errors}</div><div class="sub">错误率 ${rate}%</div></div>
+          <div class="stat" style="grid-column:span 2"><div class="label">主要故障源</div><div class="value small">${(d.by_kind || []).length ? esc(d.by_kind.map(k => k.kind + ' × ' + k.count).join('　')) : '无'}</div></div>
+        </div>`;
+
+      const recent = d.recent || [];
+      if (!recent.length) {
+        list.innerHTML = '<div class="empty">没有失败记录，一切正常</div>';
+        return;
+      }
+      list.innerHTML = recent.map(e => `
+        <li>
+          <span class="kind">${esc(kindOf(e.error))}</span>
+          <span class="when">${esc(fmtDateTime(e.at))} · ${esc(e.model || '')} · ${e.latency_ms}ms</span>
+          <div class="msg">${esc(e.error)}</div>
+        </li>`).join('');
+    } catch (e) {
+      list.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  function kindOf(err) {
+    if (!err) return '未知';
+    return err.includes(':') ? err.split(':')[0].slice(0, 40) : err.slice(0, 40);
+  }
+
+  function fmtDateTime(ts) {
+    const d = new Date(ts * 1000);
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')
+      + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
   }
 
   // 日报
@@ -291,15 +920,257 @@
     return html;
   }
 
+  // ============================================================
+  // 首次运行引导向导
+  // ============================================================
+  const ob = {
+    step: 0,
+    data: null,       // /api/onboarding 的返回
+    values: {},       // 用户填的值
+    providers: [],
+    regions: [],
+    lastError: null,  // 上一次保存失败的提示
+  };
+
+  async function obLoad() {
+    try {
+      const r = await fetch('/api/onboarding');
+      const d = await r.json();
+      if (!d.ok) return;
+      ob.data = d;
+      ob.providers = d.providers || [];
+      ob.regions = d.regions || [];
+      const c = d.current || {};
+      ob.values = {
+        api_base: c.api_base || '',
+        model: c.model || '',
+        api_key: '',
+        region_preset: c.region_preset || 'full',
+        snap_interval: c.snap_interval || 15,
+        categories: (c.categories || []).join('\n'),
+      };
+      if (!d.completed) {
+        ob.step = 0;
+        obRender();
+        document.getElementById('ob-overlay').classList.add('show');
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function obRender() {
+    const steps = (ob.data && ob.data.steps) || [];
+    const cur = steps[ob.step] || { title: '', desc: '' };
+    document.getElementById('ob-title').textContent = cur.title || '';
+    document.getElementById('ob-desc').textContent = cur.desc || '';
+
+    // 进度点
+    document.getElementById('ob-steps').innerHTML = steps.map((s, i) => {
+      const cls = i === ob.step ? 'on' : (i < ob.step ? 'done' : '');
+      return `<div class="dot ${cls}"></div>`;
+    }).join('');
+
+    const body = document.getElementById('ob-body');
+    const id = cur.id;
+
+    if (id === 'model') {
+      body.innerHTML = `
+        <div class="form-row">
+          <label>选择模型服务</label>
+          <div class="ob-pick">
+            ${ob.providers.map((p, i) => `
+              <label>
+                <input type="radio" name="ob-provider" value="${i}"
+                       ${ob.values.api_base === p.api_base ? 'checked' : ''}
+                       onchange="obPickProvider(${i})">
+                <span><span class="t">${esc(p.label)}</span><br>
+                <span class="h">${esc(p.api_base)} · ${esc(p.model)}</span></span>
+              </label>`).join('')}
+          </div>
+        </div>
+        <div class="form-row">
+          <label>API 地址</label>
+          <input type="text" id="ob-api-base" value="${esc(ob.values.api_base)}" oninput="ob.values.api_base=this.value">
+        </div>
+        <div class="form-row">
+          <label>模型名</label>
+          <input type="text" id="ob-model" value="${esc(ob.values.model)}" oninput="ob.values.model=this.value">
+          <div class="hint">必须支持看图（vision）。纯文本模型无法识别截图</div>
+        </div>
+        <div class="form-row">
+          <label>API Key</label>
+          <input type="password" id="ob-api-key" placeholder="粘贴你的 API Key" oninput="ob.values.api_key=this.value">
+          <div class="hint">只保存在本机 config.json，不会上传到任何地方</div>
+        </div>
+        <div id="ob-msg"></div>
+        <button class="btn secondary" id="ob-test" onclick="obTest()">测试连接</button>
+        <div class="hint" id="ob-test-out">测试用纯文本请求，不消耗图片 token</div>`;
+    } else if (id === 'capture') {
+      body.innerHTML = `
+        <div class="form-row">
+          <label>抓屏范围</label>
+          <div class="ob-pick">
+            ${ob.regions.map(r => `
+              <label>
+                <input type="radio" name="ob-region" value="${esc(r.value)}"
+                       ${ob.values.region_preset === r.value ? 'checked' : ''}
+                       onchange="ob.values.region_preset=this.value">
+                <span><span class="t">${esc(r.label)}</span><br>
+                <span class="h">${esc(r.hint)}</span></span>
+              </label>`).join('')}
+          </div>
+        </div>
+        <div class="form-row">
+          <label>抓屏间隔（秒）</label>
+          <input type="number" id="ob-snap" min="3" max="300" value="${esc(ob.values.snap_interval)}"
+                 oninput="ob.values.snap_interval=this.value">
+          <div class="hint">每隔这么久看一次屏幕。画面没变就跳过识别，不花钱</div>
+        </div>
+        <div id="ob-msg"></div>`;
+    } else if (id === 'categories') {
+      body.innerHTML = `
+        <div class="form-row">
+          <label>工作方向分类（每行一个）</label>
+          <textarea id="ob-cats" rows="8" oninput="ob.values.categories=this.value">${esc(ob.values.categories)}</textarea>
+          <div class="hint">识别时模型会从这些分类里挑最贴近的一个。之后在时间线里也能随时改</div>
+        </div>
+        <div id="ob-msg"></div>`;
+    } else {
+      body.innerHTML = `
+        <div id="ob-msg"></div>
+        <div class="ob-ok">
+          全部配置完成。接下来助手会每隔 ${esc(ob.values.snap_interval || 15)} 秒看一次屏幕，
+          识别出你在做什么，写进时间线。
+        </div>
+        <div class="hint" style="line-height:1.8">
+          · 截图只在本机内存中处理，识别完就丢弃，不落盘<br>
+          · 所有数据存在本机 SQLite，可以用「数据」页导出成开放格式<br>
+          · 托盘图标右键可随时「立即识别」「生成日报」「退出」
+        </div>`;
+    }
+
+    // 按钮状态
+    const last = ob.step === steps.length - 1;
+    document.getElementById('ob-back').style.display = ob.step === 0 ? 'none' : '';
+    document.getElementById('ob-next').textContent = last ? '完成' : '下一步';
+    document.getElementById('ob-skip').style.display = ob.step === 0 ? '' : 'none';
+    document.getElementById('ob-left').textContent = `第 ${ob.step + 1} / ${steps.length} 步`;
+
+    // 恢复上一步的错误提示（渲染会清空它）
+    if (ob.lastError) {
+      obShowMsg(ob.lastError, false);
+    }
+  }
+
+  function obPickProvider(i) {
+    const p = ob.providers[i];
+    if (!p) return;
+    ob.values.api_base = p.api_base;
+    ob.values.model = p.model;
+    obRender();
+  }
+
+  function obShowMsg(text, ok) {
+    const box = document.getElementById('ob-msg');
+    if (!box) return;
+    box.innerHTML = text ? `<div class="${ok ? 'ob-ok' : 'ob-problems'}">${esc(text)}</div>` : '';
+  }
+
+  async function obTest() {
+    const out = document.getElementById('ob-test-out');
+    const btn = document.getElementById('ob-test');
+    btn.disabled = true;
+    out.textContent = '测试中…';
+    // 先把配置写进去，测试才用得上真实 Key
+    await obApply(false);
+    try {
+      const r = await fetch('/api/llm/test', { method: 'POST' });
+      const d = await r.json();
+      if (d.ok) {
+        out.innerHTML = '<span style="color:#059669">连接成功</span> · 模型回复：' + esc(d.reply || '');
+        obShowMsg('连接成功，可以继续下一步了', true);
+      } else {
+        out.innerHTML = '<span style="color:#dc2626">连接失败</span> · ' + esc(d.error || '未知错误');
+        obShowMsg('连接失败：' + (d.error || '未知错误'), false);
+      }
+    } catch (e) {
+      out.innerHTML = '<span style="color:#dc2626">连接失败</span> · ' + esc(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function obApply(finish) {
+    const body = {
+      api_base: ob.values.api_base,
+      model: ob.values.model,
+      region_preset: ob.values.region_preset,
+      snap_interval: parseInt(ob.values.snap_interval) || 15,
+      categories: (ob.values.categories || '').split('\n').map(s => s.trim()).filter(s => s),
+    };
+    if (ob.values.api_key) body.api_key = ob.values.api_key;
+    if (finish) body.finish = true;
+    const r = await fetch('/api/onboarding/apply', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      ob.lastError = ((d.problems && d.problems.length) ? d.problems : [d.error || '保存失败']).join('；');
+      obShowMsg(ob.lastError, false);
+      return false;
+    }
+    ob.lastError = null;
+    return true;
+  }
+
+  async function obNext() {
+    const steps = (ob.data && ob.data.steps) || [];
+    if (ob.step === steps.length - 1) {
+      // 最后一步才强校验 —— 前面几步不该因为还没填 Key 就把人拦住
+      const ok = await obApply(true);
+      if (!ok) return;
+      document.getElementById('ob-overlay').classList.remove('show');
+      toast('配置完成，开始记录');
+      loadSettings();
+      return;
+    }
+    // 中间步骤：保存当前能保存的（不阻塞前进），错误提示就地显示
+    await obApply(false);
+    ob.step++;
+    obRender();
+  }
+
+  function obBack() {
+    if (ob.step > 0) { ob.step--; obRender(); }
+  }
+
+  async function obSkip() {
+    try {
+      await fetch('/api/onboarding/skip', { method: 'POST' });
+    } catch (e) { /* 忽略 */ }
+    document.getElementById('ob-overlay').classList.remove('show');
+    toast('已跳过，可在「设置」里随时配置');
+  }
+
+  function obRestart() {
+    ob.step = 0;
+    obRender();
+    document.getElementById('ob-overlay').classList.add('show');
+  }
+
   // 设置
   async function loadSettings() {
     try {
       const r = await fetch('/api/settings');
       const cfg = await r.json();
+      document.getElementById('set-snap-interval').value = cfg.capture?.snap_interval ?? 15;
       document.getElementById('set-interval').value = cfg.capture?.interval ?? 120;
       document.getElementById('set-region').value = cfg.capture?.region_preset ?? 'full';
       document.getElementById('set-api-base').value = cfg.llm?.api_base ?? '';
       document.getElementById('set-model').value = cfg.llm?.model ?? 'deepseek-flash';
+      document.getElementById('set-price-in').value = cfg.llm?.price_per_1m_input ?? 0;
+      document.getElementById('set-price-out').value = cfg.llm?.price_per_1m_output ?? 0;
       document.getElementById('set-trigger').value = cfg.report?.trigger ?? 'both';
       document.getElementById('set-scheduled-time').value = cfg.report?.scheduled_time ?? '18:00';
       const cats = cfg.categories || [];
@@ -308,10 +1179,35 @@
     } catch (e) { toast('加载设置失败'); }
   }
 
-  async function saveSettings() {
+  async function testLLM() {
+    const btn = document.getElementById('btn-test-llm');
+    const out = document.getElementById('llm-test-result');
+    btn.disabled = true;
+    btn.textContent = '测试中…';
+    out.textContent = '正在测试…';
+    try {
+      // 先保存当前设置（含 Key），再用真实配置测试
+      await saveSettings(true);
+      const r = await fetch('/api/llm/test', { method: 'POST' });
+      const res = await r.json();
+      if (res.ok) {
+        out.innerHTML = '<span style="color:#059669">连接成功</span> · 模型回复：' + esc(res.reply || '');
+      } else {
+        out.innerHTML = '<span style="color:#dc2626">连接失败</span> · ' + esc(res.error || '未知错误');
+      }
+    } catch (e) {
+      out.innerHTML = '<span style="color:#dc2626">连接失败</span> · ' + esc(e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '测试连接';
+    }
+  }
+
+  async function saveSettings(silent) {
     const cats = document.getElementById('set-categories').value.split('\n').map(s => s.trim()).filter(s => s);
     const body = {
       capture: {
+        snap_interval: parseInt(document.getElementById('set-snap-interval').value) || 15,
         interval: parseInt(document.getElementById('set-interval').value) || 120,
         region_preset: document.getElementById('set-region').value,
       },
@@ -319,6 +1215,8 @@
       llm: {
         api_base: document.getElementById('set-api-base').value,
         model: document.getElementById('set-model').value,
+        price_per_1m_input: parseFloat(document.getElementById('set-price-in').value) || 0,
+        price_per_1m_output: parseFloat(document.getElementById('set-price-out').value) || 0,
       },
       report: {
         trigger: document.getElementById('set-trigger').value,
@@ -334,14 +1232,18 @@
         body: JSON.stringify(body)
       });
       const res = await r.json();
-      if (res.ok) { toast('设置已保存并生效'); window._categories = cats; }
-      else toast('保存失败');
-    } catch (e) { toast('保存失败'); }
+      if (res.ok) { window._categories = cats; if (!silent) toast('设置已保存并生效'); }
+      else if (!silent) toast('保存失败');
+      return res.ok;
+    } catch (e) { if (!silent) toast('保存失败'); return false; }
   }
 
   // 初始加载
+  loadOverview();
+  loadHeatmap();
   loadTimeline();
   loadSettings();
+  obLoad();
 </script>
 </body>
 </html>

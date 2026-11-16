@@ -1,12 +1,33 @@
 # -*- mode: python ; coding: utf-8 -*-
+# 诚实日报助手 · PyInstaller 打包配置
+#
+# 用法：python -m PyInstaller HonestDailyHelper.spec
+# 产出：dist/HonestDailyHelper.exe（单文件，双击即用）
 
+import os
+
+# 资源目录：打包时以脚本所在目录为基准（spec 文件与 main.py 同级）
+BASE = os.path.abspath(os.getcwd())
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=[BASE],
     binaries=[],
-    datas=[('web_ui.html', '.')],
-    hiddenimports=[],
+    # 必须包含的运行时资源：
+    #   web_ui.html          —— Web UI 页面（SkillServer 用 _resource_path 读取）
+    #   config.example.json  —— 首次运行时据此生成默认 config.json
+    datas=[
+        (os.path.join(BASE, 'web_ui.html'), '.'),
+        (os.path.join(BASE, 'config.example.json'), '.'),
+    ],
+    # 动态导入的模块必须显式声明，否则 PyInstaller 分析不到：
+    #   tray        —— main.py 用 `from tray import TrayIcon` 在函数内延迟导入
+    #   onboarding  —— 同上，且 skill_server 通过类属性引用
+    hiddenimports=[
+        'tray',
+        'onboarding',
+        'archive_data',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -29,7 +50,8 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    # 窗口模式：双击后不弹黑色控制台窗口（配合托盘/启动器更干净）
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

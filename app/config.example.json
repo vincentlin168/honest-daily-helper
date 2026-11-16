@@ -3,7 +3,10 @@
     "api_base": "https://api.deepseek.com/v1",
     "api_key": "your-api-key-here",
     "model": "deepseek-flash",
-    "system_prompt": ""
+    "system_prompt": "",
+    "use_system_proxy": false,
+    "price_per_1m_input": 0.0,
+    "price_per_1m_output": 0.0
   },
   "capture": {
     "snap_interval": 15,
@@ -13,7 +16,9 @@
     "region_preset": "full"
   },
   "storage": {
-    "db_path": "records.db"
+    "db_path": "records.db",
+    "archive_dir": "outputs/reports",
+    "export_dir": "exports"
   },
   "report": {
     "trigger": "both",
@@ -22,11 +27,31 @@
   "upload": {
     "enabled": false,
     "url": "",
-    "token": ""
+    "token": "",
+    "use_system_proxy": false
   },
   "skill_server": {
     "enabled": true,
     "port": 8088,
     "token": ""
-  }
+  },
+  "tray": {
+    "enabled": true
+  },
+  "onboarding": {
+    "completed": false,
+    "completed_at": "",
+    "skipped": false
+  },
+  "categories": [
+    "产品设计",
+    "代码开发",
+    "运营分析",
+    "数据复盘",
+    "客户支持",
+    "项目管理",
+    "日报整理",
+    "资料研究",
+    "其他"
+  ]
 }

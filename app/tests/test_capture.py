@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image
 
-from capture import Capture, Screenshot, REGION_PRESETS
+from capture import Capture, Screenshot
 
 
 def make_image(w=64, h=64, color=(255, 0, 0)):

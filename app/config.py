@@ -13,15 +13,17 @@ Spec
 
 配置结构（与 DEFAULTS 对齐）：
     llm:            api_base / api_key / model / system_prompt
-    capture:        interval / quality / save_dir / region_preset
-    storage:        db_path
+                    use_system_proxy / price_per_1m_input / price_per_1m_output
+    capture:        snap_interval / interval / quality / save_dir / region_preset
+    storage:        db_path / archive_dir / export_dir
     report:         trigger(manual|scheduled|both) / scheduled_time
-    upload:         enabled / url / token
+    upload:         enabled / url / token / use_system_proxy
     skill_server:   enabled / port / token
 """
 
 import copy
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -33,6 +35,10 @@ DEFAULTS: Dict[str, Any] = {
         "api_key": "",
         "model": "deepseek-flash",  # 用户拍板：默认 DeepSeek-flash（免费档，视觉可用）
         "system_prompt": "",         # 留空则用 llm_client 内置识别 prompt
+        "use_system_proxy": False,   # 默认直连官方，不被系统代理静默改道
+        # 价格（每百万 token），用于成本透明度展示；填 0 则不显示金额
+        "price_per_1m_input": 0.0,
+        "price_per_1m_output": 0.0,
     },
     "capture": {
         "snap_interval": 15,         # 抓屏间隔（秒，密集抓，不漏记）
@@ -43,6 +49,8 @@ DEFAULTS: Dict[str, Any] = {
     },
     "storage": {
         "db_path": "records.db",
+        "archive_dir": "outputs/reports",  # 日报留档目录（Markdown 文件）
+        "export_dir": "exports",           # 数据导出目录
     },
     "report": {
         "trigger": "both",           # manual / scheduled / both（用户拍板：都要）
@@ -52,11 +60,20 @@ DEFAULTS: Dict[str, Any] = {
         "enabled": False,            # 数据上报（默认关，仅推用户自己的服务端）
         "url": "",
         "token": "",
+        "use_system_proxy": False,   # 默认直连，不被系统代理静默改道
     },
     "skill_server": {
         "enabled": True,             # Skill 本地服务（首版要做）
         "port": 8088,                # 本地 Skill 服务端口
         "token": "",                 # 鉴权 token，留空则不鉴权
+    },
+    "tray": {
+        "enabled": True,             # Windows 系统托盘常驻（右键：打开面板/立即识别/生成日报/退出）
+    },
+    "onboarding": {
+        "completed": False,          # 首次运行引导是否已完成
+        "completed_at": "",          # 完成时间（ISO 格式）
+        "skipped": False,            # 用户是否主动跳过
     },
     "categories": [
         "产品设计", "代码开发", "运营分析", "数据复盘",
@@ -93,8 +110,22 @@ class Config:
 
     # ---------- 读写 ----------
     def load(self) -> None:
-        with open(self.config_path, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
+        """读取配置。
+
+        用 ``utf-8-sig`` 而不是 ``utf-8``：Windows 记事本另存为 UTF-8 时
+        会加 BOM（字节序标记），用纯 utf-8 读会抛 JSONDecodeError，
+        让整个程序起不来 —— 这是新手最常踩的坑之一。
+        ``utf-8-sig`` 对有无 BOM 都能正常解析。
+        """
+        try:
+            with open(self.config_path, "r", encoding="utf-8-sig") as f:
+                loaded = json.load(f)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"配置文件不是合法的 JSON：{self.config_path}\n"
+                f"原因：{exc}\n"
+                f"提示：请检查引号是否成对、有没有多余逗号。"
+            ) from exc
         if not isinstance(loaded, dict):
             raise ValueError(f"配置文件格式错误，应为 JSON 对象：{self.config_path}")
         # 用默认值兜底缺失的顶层/嵌套键
@@ -107,7 +138,20 @@ class Config:
         self._data = merged
 
     def save(self, path: Optional[str] = None) -> None:
+        """保存配置。
+
+        覆盖前先备份上一份（``<name>.bak``），只保留最近一份。
+        这是为了防止「一次误写就把用户配置弄丢且无法恢复」——
+        比如引导流程写坏了 Key。
+        """
         target = Path(path) if path else self.config_path
+        try:
+            if target.exists():
+                backup = target.with_suffix(target.suffix + ".bak")
+                shutil.copy2(target, backup)
+        except Exception:
+            # 备份失败不该阻断保存
+            pass
         with open(target, "w", encoding="utf-8") as f:
             json.dump(self._data, f, ensure_ascii=False, indent=2)
 

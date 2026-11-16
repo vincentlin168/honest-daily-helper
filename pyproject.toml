@@ -1,0 +1,53 @@
+[project]
+name = "honest-daily-helper"
+version = "2.0.0"
+description = "本地优先、诚实、可审计的电脑工作记录 + 日报工具"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "vincentlin168" }]
+keywords = ["screen-recognition", "llm", "daily-report", "privacy", "local-first"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: Chinese (Simplified)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Utilities",
+]
+
+dependencies = [
+    "Pillow>=10.0",
+    "httpx>=0.27",
+]
+
+[project.urls]
+Repository = "https://github.com/vincentlin168/honest-daily-helper"
+Issues = "https://github.com/vincentlin168/honest-daily-helper/issues"
+
+[project.scripts]
+honest-daily-helper = "main:main"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+# 只启用高置信度规则，避免把风格偏好当错误
+select = ["E4", "E7", "E9", "F"]
+ignore = ["E501"]
+
+[tool.setuptools]
+py-modules = [
+    "aggregate", "capture", "config", "http_client", "llm_client",
+    "logging_setup", "main", "overview", "report", "skill_server",
+    "store", "upload",
+]
+
+[tool.setuptools.package-data]
+"*" = ["web_ui.html", "config.example.json"]

@@ -19,15 +19,21 @@ Spec
 1. 零依赖（标准库 http.server），只监听 127.0.0.1。
 2. 可选 Bearer Token 鉴权。
 3. 设置更新通过 settings_callback 回调，让主程序热更新模块。
+4. **多线程处理**（ThreadingHTTPServer）：Web UI 切页签时会并发请求，
+   单线程 HTTPServer 会让慢请求（如生成日报）阻塞其它请求，页面表现为「卡住」。
 """
 
 import json
 import sys
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List
 from urllib.parse import urlparse, parse_qs
+
+import archive_data
+import exporter
+from overview import build_overview
 
 
 def _resource_path(name: str) -> Path:
@@ -46,6 +52,10 @@ class SkillHandler(BaseHTTPRequestHandler):
     report_builder = None     # build_report 函数
     config = None             # Config 实例
     settings_callback = None  # 设置更新后的回调（热更新模块）
+    llm_tester = None         # 连通性测试回调（返回 {ok, reply|error}）
+    archive = None            # ReportArchive（日报留档）
+    export_dir = "exports"    # 数据导出目录
+    onboarding = None         # Onboarding（首次运行引导）
 
     def _authorized(self) -> bool:
         if not self.token:
@@ -77,6 +87,34 @@ class SkillHandler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    # ---------- 导出辅助 ----------
+    def _entries_for_export(self, date_str: str) -> list:
+        """取待导出的记录。date 为空则导出全部（有上限）。"""
+        if not self.store:
+            return []
+        if date_str:
+            return self.store.entries_by_day(date_str)
+        # 全部：取最近 90 天
+        end = int(datetime.now().timestamp())
+        start = end - 90 * 86400
+        return self.store.entries_in_range(start, end)
+
+    def _render_export(self, entries: list, date_str: str, fmt: str):
+        """按格式渲染导出内容。不支持的格式返回 None。"""
+        fmt = (fmt or "json").lower()
+        if fmt == "json":
+            meta = {"scope": date_str or "all", "tool": "诚实日报助手"}
+            return exporter.export_json(entries, meta)
+        if fmt == "csv":
+            return exporter.export_csv(entries)
+        if fmt in ("md", "markdown"):
+            report_md = None
+            arch = type(self).archive
+            if date_str and arch:
+                report_md = arch.load(date_str)
+            return exporter.export_markdown(entries, date_str or None, report_md)
+        return None
+
     # ---------- GET ----------
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -106,6 +144,57 @@ class SkillHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "date": today, "entries_count": len(entries)})
             return
 
+        # ---------- 首次运行引导 ----------
+        if path == "/api/onboarding":
+            ob = type(self).onboarding
+            if ob is None:
+                self._send_json({"ok": True, "completed": True, "steps": []})
+                return
+            cfg = type(self).config
+            self._send_json({
+                "ok": True,
+                "completed": ob.is_completed(),
+                "steps": ob.steps(),
+                "providers": ob.providers(),
+                "regions": ob.region_options(),
+                "current": {
+                    "api_base": cfg.get("llm", "api_base", default="") if cfg else "",
+                    "model": cfg.get("llm", "model", default="") if cfg else "",
+                    "region_preset": cfg.get("capture", "region_preset", default="full") if cfg else "full",
+                    "snap_interval": cfg.get("capture", "snap_interval", default=15) if cfg else 15,
+                    "categories": cfg.get("categories", default=[]) if cfg else [],
+                },
+            })
+            return
+
+        if path == "/api/onboarding/validate":
+            ob = type(self).onboarding
+            if ob is None:
+                self._send_json({"ok": True})
+                return
+            kind = (query.get("kind") or [""])[0]
+            if kind == "model":
+                api_base = (query.get("api_base") or [""])[0]
+                model = (query.get("model") or [""])[0]
+                api_key = (query.get("api_key") or [""])[0]
+                self._send_json({"ok": True, **ob.validate_model(api_base, model, api_key)})
+                return
+            if kind == "capture":
+                region = (query.get("region_preset") or ["full"])[0]
+                try:
+                    interval = int((query.get("snap_interval") or ["15"])[0])
+                except (TypeError, ValueError):
+                    interval = 15
+                self._send_json({"ok": True, **ob.validate_capture(region, interval)})
+                return
+            if kind == "categories":
+                cats = (query.get("categories") or [""])[0]
+                items = [c for c in cats.split(",") if c.strip()]
+                self._send_json({"ok": True, **ob.validate_categories(items)})
+                return
+            self._send_json({"ok": False, "error": "unknown kind"}, status=400)
+            return
+
         if path == "/api/entries":
             date = (query.get("date") or [datetime.now().strftime("%Y-%m-%d")])[0]
             entries = self.store.entries_by_day(date) if self.store else []
@@ -125,15 +214,233 @@ class SkillHandler(BaseHTTPRequestHandler):
             self._send_json(cfg.to_public_dict() if cfg else {})
             return
 
+        # 概览：今日统计卡片 + 成本透明度
+        if path == "/api/overview":
+            date = (query.get("date") or [datetime.now().strftime("%Y-%m-%d")])[0]
+            entries = self.store.entries_by_day(date) if self.store else []
+            usage = self.store.token_usage_by_day(date) if self.store else {}
+            cfg = type(self).config
+            price_in = float(cfg.get("llm", "price_per_1m_input", default=0) or 0) if cfg else 0.0
+            price_out = float(cfg.get("llm", "price_per_1m_output", default=0) or 0) if cfg else 0.0
+            data = build_overview(entries, usage, price_in, price_out)
+            data["date"] = date
+            self._send_json({"ok": True, **data})
+            return
+
+        # 热力图：最近 N 天 × 24 小时
+        if path == "/api/heatmap":
+            try:
+                days = int((query.get("days") or [7])[0])
+            except (TypeError, ValueError):
+                days = 7
+            grid = self.store.hourly_histogram(days) if self.store else []
+            self._send_json({"ok": True, "days": days, "grid": grid})
+            return
+
+        # 抓屏间隔 / 汇总周期的实测效果
+        if path == "/api/intervals":
+            try:
+                days = int((query.get("days") or [7])[0])
+            except (TypeError, ValueError):
+                days = 7
+            data = self.store.interval_effectiveness(days) if self.store else {}
+            cfg = type(self).config
+            if cfg:
+                data["configured_snap_interval"] = int(
+                    cfg.get("capture", "snap_interval", default=15) or 15)
+                data["configured_summary_interval"] = int(
+                    cfg.get("capture", "interval", default=120) or 120)
+            self._send_json({"ok": True, **data})
+            return
+
+        # 错误诊断：复用 llm_calls.error，不另建 error_logs 表
+        if path == "/api/errors":
+            try:
+                days = int((query.get("days") or [7])[0])
+            except (TypeError, ValueError):
+                days = 7
+            summary = self.store.error_summary(days) if self.store else {}
+            self._send_json({"ok": True, **summary})
+            return
+
+        # 日报留档列表
+        if path == "/api/archive":
+            arch = type(self).archive
+            items = arch.list_reports() if arch else []
+            self._send_json({"ok": True, "reports": items})
+            return
+
+        # 读取某天的留档正文
+        if path == "/api/archive/body":
+            date = (query.get("date") or [""])[0]
+            arch = type(self).archive
+            body = arch.load(date) if arch else None
+            if body is None:
+                self._send_json({"ok": False, "error": "没有该日期的留档"}, status=404)
+                return
+            self._send_json({"ok": True, "date": date, "report": body})
+            return
+
+        # ---------- 历史数据归档 ----------
+        if path == "/api/data/archive/scan":
+            if not type(self).store:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            before = (query.get("before") or [""])[0]
+            before_ts = int(before) if before.isdigit() else None
+            self._send_json({"ok": True, **archive_data.scan_defective(
+                type(self).store, before_ts)})
+            return
+
+        if path == "/api/data/archive/list":
+            if not type(self).store:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            limit = int((query.get("limit") or ["100"])[0])
+            offset = int((query.get("offset") or ["0"])[0])
+            self._send_json({"ok": True, **archive_data.list_archived(
+                type(self).store, limit=limit, offset=offset)})
+            return
+
+        if path == "/api/data/archive/export":
+            if not type(self).store:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            out = str(Path(type(self).export_dir) / "archived_entries.json")
+            self._send_json({"ok": True, **archive_data.export_archived(
+                type(self).store, out)})
+            return
+
+        # 导出预览（不写文件，仅返回内容，便于前端「复制到剪贴板」）
+        if path == "/api/export/preview":
+            date = (query.get("date") or [""])[0]
+            fmt = (query.get("format") or ["json"])[0]
+            entries = self._entries_for_export(date)
+            content = self._render_export(entries, date, fmt)
+            if content is None:
+                self._send_json({"ok": False, "error": f"不支持的格式: {fmt}"}, status=400)
+                return
+            self._send_json({"ok": True, "format": fmt, "date": date,
+                             "content": content, "count": len(entries)})
+            return
+
         self._send_json({"ok": False, "error": f"unknown path: {path}"}, status=404)
 
     # ---------- POST ----------
-    def do_POST(self):
+    def     do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
 
         if not self._authorized():
             self._send_json({"ok": False, "error": "unauthorized"}, status=401)
+            return
+
+        # 连通性测试：/api/llm/test —— 验证 API Key / 模型 / 网络是否可用
+        if path == "/api/llm/test":
+            tester = type(self).llm_tester
+            if tester is None:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            try:
+                self._send_json(tester())
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=200)
+            return
+
+        # ---------- 首次运行引导：应用配置并完成 ----------
+        if path == "/api/onboarding/apply":
+            ob = type(self).onboarding
+            cfg = type(self).config
+            if ob is None or cfg is None:
+                self._send_json({"ok": False, "error": "引导不可用"}, status=503)
+                return
+            body = self._read_json_body()
+
+            # 分步校验：任何一步不通过都不写配置，避免写出半成品
+            checks = []
+            if "api_base" in body or "model" in body or "api_key" in body:
+                api_base = body.get("api_base", cfg.get("llm", "api_base", default=""))
+                model = body.get("model", cfg.get("llm", "model", default=""))
+                api_key = body.get("api_key", "")
+                res = ob.validate_model(api_base, model, api_key)
+                checks.append(res)
+            if "region_preset" in body or "snap_interval" in body:
+                res = ob.validate_capture(
+                    body.get("region_preset", cfg.get("capture", "region_preset", default="full")),
+                    body.get("snap_interval", cfg.get("capture", "snap_interval", default=15)))
+                checks.append(res)
+            if "categories" in body:
+                res = ob.validate_categories(body.get("categories") or [])
+                checks.append(res)
+
+            failed = [c for c in checks if not c.get("ok")]
+            if failed:
+                problems: List[str] = []
+                for c in failed:
+                    problems.extend(c.get("problems", []))
+                self._send_json({"ok": False, "error": "；".join(problems),
+                                 "problems": problems})
+                return
+
+            # 写配置
+            if "api_base" in body:
+                cfg.set("llm", "api_base", body["api_base"])
+            if "model" in body:
+                cfg.set("llm", "model", body["model"])
+            if body.get("api_key"):
+                cfg.set("llm", "api_key", body["api_key"])
+            if "region_preset" in body:
+                cfg.set("capture", "region_preset", body["region_preset"])
+            if "snap_interval" in body:
+                cfg.set("capture", "snap_interval", int(body["snap_interval"]))
+            if "categories" in body:
+                res = ob.validate_categories(body.get("categories") or [])
+                cfg.set("categories", res.get("categories") or [])
+            cfg.save()
+
+            if body.get("finish"):
+                ob.mark_completed()
+            if type(self).settings_callback:
+                try:
+                    type(self).settings_callback()
+                except Exception:
+                    pass
+            self._send_json({"ok": True, "completed": ob.is_completed()})
+            return
+
+        if path == "/api/onboarding/skip":
+            ob = type(self).onboarding
+            if ob is None:
+                self._send_json({"ok": True})
+                return
+            ob.mark_skipped()
+            self._send_json({"ok": True, "completed": ob.is_completed()})
+            return
+
+        # ---------- 历史数据归档：执行归档 / 恢复 ----------
+        if path == "/api/data/archive/run":
+            if not type(self).store:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            body = self._read_json_body()
+            before = body.get("before")
+            before_ts = int(before) if isinstance(before, (int, str)) and str(before).isdigit() else None
+            dry_run = bool(body.get("dry_run", False))
+            self._send_json({"ok": True, **archive_data.archive_defective(
+                type(self).store, before_ts, dry_run=dry_run)})
+            return
+
+        if path == "/api/data/archive/restore":
+            if not type(self).store:
+                self._send_json({"ok": False, "error": "服务未就绪"}, status=503)
+                return
+            body = self._read_json_body()
+            ids = body.get("ids")
+            if ids is not None and not isinstance(ids, list):
+                self._send_json({"ok": False, "error": "ids 必须是数组"}, status=400)
+                return
+            self._send_json({"ok": True, **archive_data.restore_archived(
+                type(self).store, ids)})
             return
 
         # 手动改分类：/api/entries/{id}/category
@@ -149,6 +456,68 @@ class SkillHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "category required"}, status=400)
                 return
             ok = self.store.update_category(entry_id, category) if self.store else False
+            self._send_json({"ok": ok})
+            return
+
+        # 编辑记录：/api/entries/{id} —— 改 activity / content / category
+        if path.startswith("/api/entries/") and path.count("/") == 3:
+            try:
+                entry_id = int(path.split("/")[3])
+            except (IndexError, ValueError):
+                self._send_json({"ok": False, "error": "invalid id"}, status=400)
+                return
+            body = self._read_json_body()
+            fields = {k: body[k] for k in ("activity", "content", "category") if k in body}
+            if not fields:
+                self._send_json({"ok": False, "error": "没有可编辑字段"}, status=400)
+                return
+            ok = self.store.update_entry(entry_id, **fields) if self.store else False
+            entry = self.store.get_entry(entry_id) if (ok and self.store) else None
+            self._send_json({"ok": ok, "entry": entry})
+            return
+
+        # 删除记录：/api/entries/{id}/delete
+        if path.startswith("/api/entries/") and path.endswith("/delete"):
+            try:
+                entry_id = int(path.split("/")[3])
+            except (IndexError, ValueError):
+                self._send_json({"ok": False, "error": "invalid id"}, status=400)
+                return
+            ok = self.store.delete_entry(entry_id) if self.store else False
+            self._send_json({"ok": ok})
+            return
+
+        # 导出到文件：/api/export
+        if path == "/api/export":
+            body = self._read_json_body()
+            date = body.get("date", "") or ""
+            fmt = body.get("format", "json") or "json"
+            entries = self._entries_for_export(date)
+            content = self._render_export(entries, date, fmt)
+            if content is None:
+                self._send_json({"ok": False, "error": f"不支持的格式: {fmt}"}, status=400)
+                return
+            root = Path(type(self).export_dir or "exports")
+            root.mkdir(parents=True, exist_ok=True)
+            stem = date or "全部记录"
+            ext = {"json": "json", "csv": "csv", "md": "md", "markdown": "md"}.get(fmt.lower(), "txt")
+            path = root / f"{stem}.{ext}"
+            exporter.write_export(str(path), content)
+            self._send_json({
+                "ok": True,
+                "path": str(path.resolve()),
+                "format": fmt,
+                "count": len(entries),
+                "message": f"已导出 {len(entries)} 条记录到 {path.resolve()}",
+            })
+            return
+
+        # 删除留档：/api/archive/delete
+        if path == "/api/archive/delete":
+            body = self._read_json_body()
+            date = body.get("date", "") or ""
+            arch = type(self).archive
+            ok = arch.delete(date) if arch else False
             self._send_json({"ok": ok})
             return
 
@@ -180,7 +549,9 @@ class SkillServer:
     """Skill 本地服务。"""
 
     def __init__(self, store, token: str = "", port: int = 8088,
-                 report_builder=None, config=None, settings_callback=None):
+                 report_builder=None, config=None, settings_callback=None,
+                 llm_tester=None, archive=None, export_dir: str = "exports",
+                 onboarding=None):
         self.store = store
         self.port = port
         SkillHandler.store = store
@@ -188,8 +559,14 @@ class SkillServer:
         SkillHandler.report_builder = report_builder
         SkillHandler.config = config
         SkillHandler.settings_callback = settings_callback
+        SkillHandler.llm_tester = llm_tester
+        SkillHandler.archive = archive
+        SkillHandler.export_dir = export_dir
+        SkillHandler.onboarding = onboarding
 
     def run(self):
-        server = HTTPServer(("127.0.0.1", self.port), SkillHandler)
+        # daemon_threads=True：请求线程随主进程退出，避免关不掉
+        server = ThreadingHTTPServer(("127.0.0.1", self.port), SkillHandler)
+        server.daemon_threads = True
         print(f"Skill 服务已启动: http://127.0.0.1:{self.port}")
         server.serve_forever()

@@ -22,6 +22,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
+from http_client import make_client
+
 # 默认工作方向分类（用户可在设置里自定义）
 DEFAULT_CATEGORIES = [
     "产品设计", "代码开发", "运营分析", "数据复盘",
@@ -70,12 +72,23 @@ class LLMClient:
 
     REQUEST_TIMEOUT = 120.0  # 视觉模型延迟高于纯文本，放宽超时
 
+    # 图片识别的 token 预算。
+    # 实测 deepseek-flash 的思维链常消耗 700-1100 token；原 1024 会让预算被
+    # 思维链吃光 -> content 为空、finish_reason='length'，表现为「识别失败」。
+    # 2048 实测稳定（思维链 736 token 时 finish_reason='stop'）。
+    MAX_TOKENS = 2048
+
+    # 连通性测试的 token 预算（纯文本，思维链同样要占预算）
+    MAX_TOKENS_TEXT = 512
+
     def __init__(self, api_base: str, api_key: str, model: str,
                  system_prompt: Optional[str] = None,
-                 categories: Optional[list] = None):
+                 categories: Optional[list] = None,
+                 use_system_proxy: bool = False):
         self.api_base = (api_base or "").rstrip("/")
         self.api_key = api_key or ""
         self.model = model or "deepseek-flash"
+        self.use_system_proxy = bool(use_system_proxy)
         # 自定义 system_prompt 优先，否则按分类动态生成
         self.system_prompt = system_prompt or build_system_prompt(categories)
 
@@ -111,10 +124,11 @@ class LLMClient:
                 "model": self.model,
                 "messages": self._build_messages(image_base64),
                 "temperature": 0.2,
-                "max_tokens": 1024,
+                "max_tokens": self.MAX_TOKENS,
             }
             try:
-                with httpx.Client(timeout=self.REQUEST_TIMEOUT) as client:
+                with make_client(timeout=self.REQUEST_TIMEOUT,
+                                 use_system_proxy=self.use_system_proxy) as client:
                     response = client.post(
                         f"{self.api_base}/chat/completions",
                         headers={
@@ -137,15 +151,44 @@ class LLMClient:
     # ---------- 解析 ----------
     @staticmethod
     def _extract_text(payload: Any) -> str:
+        """从响应里取出模型输出。
+
+        优先 ``content``；若为空则回退 ``reasoning_content``（推理模型的思维链）。
+
+        为什么需要回退
+        --------------
+        deepseek-flash 这类推理模型会先输出思维链。实测：思维链常消耗 700-1100
+        token，若 ``max_tokens`` 给得太小（如 1024），预算会被思维链吃光 →
+        ``content`` 为空、``finish_reason='length'`` → 被误判成「模型不支持图片」
+        或「Key 有问题」。
+
+        这与 ``test_connection`` 是同一个 bug 家族：纯文本路径早已修好，
+        图片路径当时漏了。图片识别失败率约 3.5%（650 次调用中 23 次）。
+        """
         try:
-            raw = payload["choices"][0]["message"]["content"]
+            message = payload["choices"][0]["message"]
         except (KeyError, IndexError, TypeError):
             raise RuntimeError("模型响应格式异常，未取到内容")
-        if isinstance(raw, list):
-            raw = "".join(item.get("text", "") for item in raw if isinstance(item, dict))
-        if not raw or not raw.strip():
-            raise RuntimeError("模型返回了空内容（可能是纯文本模型无法处理图片，或 Key/额度问题）")
-        return raw
+
+        for field in ("content", "reasoning_content"):
+            raw = message.get(field)
+            if isinstance(raw, list):
+                raw = "".join(item.get("text", "") for item in raw if isinstance(item, dict))
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+
+        # 两个字段都空 —— 再看一眼 finish_reason，给出可诊断的原因
+        finish = ""
+        try:
+            finish = payload["choices"][0].get("finish_reason", "")
+        except Exception:
+            pass
+        if finish == "length":
+            raise RuntimeError(
+                "模型输出被 max_tokens 截断（思维链吃光了预算）。"
+                "请调大 max_tokens 后重试"
+            )
+        raise RuntimeError("模型返回了空内容（可能是纯文本模型无法处理图片，或 Key/额度问题）")
 
     @staticmethod
     def _extract_usage(payload: Any) -> Dict[str, int]:
@@ -315,9 +358,14 @@ class LLMClient:
         }
 
     def test_connection(self) -> Dict[str, Any]:
-        """用纯文本探测消息测试连通性（不消耗图片 token）。"""
+        """用纯文本探测消息测试连通性（不消耗图片 token）。
+
+        注意：``max_tokens`` 必须给足。有些模型（如 deepseek-flash）会先输出
+        ``reasoning_content``（思维链），若预算太小会被思维链吃光，导致
+        ``content`` 为空、``finish_reason='length'`` —— 被误判成「连接失败」。
+        """
         try:
-            with httpx.Client(timeout=15.0) as client:
+            with make_client(timeout=15.0, use_system_proxy=self.use_system_proxy) as client:
                 response = client.post(
                     f"{self.api_base}/chat/completions",
                     headers={
@@ -327,13 +375,35 @@ class LLMClient:
                     json={
                         "model": self.model,
                         "messages": [{"role": "user", "content": "请只回复四个字：连接成功"}],
-                        "max_tokens": 20,
+                        "max_tokens": self.MAX_TOKENS_TEXT,
                     },
                 )
             if response.status_code == 200:
-                return {"ok": True, "reply": self._extract_text(response.json())}
+                payload = response.json()
+                text = self._extract_reply(payload)
+                if text:
+                    return {"ok": True, "reply": text}
+                return {"ok": False, "error": "模型返回空内容（可能被 max_tokens 截断，可调大后重试）"}
             return {"ok": False, "error": f"[{response.status_code}] {response.text[:200]}"}
         except httpx.TimeoutException:
             return {"ok": False, "error": "连接超时"}
         except httpx.RequestError as exc:
             return {"ok": False, "error": f"连接失败：{exc}"}
+
+    @staticmethod
+    def _extract_reply(payload: Any) -> str:
+        """从响应里取出可读文本。
+
+        优先 ``content``；若为空则回退 ``reasoning_content``（推理模型的思维链）。
+        """
+        try:
+            message = payload["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError):
+            return ""
+        for field in ("content", "reasoning_content"):
+            raw = message.get(field)
+            if isinstance(raw, list):
+                raw = "".join(item.get("text", "") for item in raw if isinstance(item, dict))
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+        return ""

@@ -9,14 +9,18 @@ Spec
 1. **Bearer Token 鉴权**：可选，设置后请求头带 Authorization。
 2. **失败重试 1 次**，超时 30 秒，失败计入日志。
 3. **默认关闭**：不配置 url 就不发，绝不悄悄上报。
+4. **不走系统代理**：默认 ``trust_env=False``，避免开着系统代理的机器上
+   本地上报地址被代理转发而收到 502（改道必须显式发生，不能静默）。
 
 依赖：httpx。
 """
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import httpx
+
+from http_client import make_client
 
 
 class ReportUploader:
@@ -25,9 +29,10 @@ class ReportUploader:
     REQUEST_TIMEOUT = 30.0
     MAX_RETRY = 1
 
-    def __init__(self, url: str = "", token: str = ""):
+    def __init__(self, url: str = "", token: str = "", use_system_proxy: bool = False):
         self.url = (url or "").strip()
         self.token = (token or "").strip()
+        self.use_system_proxy = bool(use_system_proxy)
 
     @property
     def enabled(self) -> bool:
@@ -54,7 +59,8 @@ class ReportUploader:
         for attempt in range(self.MAX_RETRY + 1):
             started = time.perf_counter()
             try:
-                with httpx.Client(timeout=self.REQUEST_TIMEOUT) as client:
+                with make_client(timeout=self.REQUEST_TIMEOUT,
+                                 use_system_proxy=self.use_system_proxy) as client:
                     response = client.post(self.url, headers=self._headers(), json=body)
                 last_duration = int((time.perf_counter() - started) * 1000)
                 last_status = response.status_code

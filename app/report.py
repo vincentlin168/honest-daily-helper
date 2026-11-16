@@ -34,12 +34,15 @@ def format_clock(ts: int) -> str:
     return datetime.fromtimestamp(ts).strftime("%H:%M")
 
 
-def _distribute_to_hours(start_ts: int, end_ts: int, duration: int,
-                         hourly: Dict[int, int]) -> None:
+def distribute_to_hours(start_ts: int, end_ts: int, duration: int,
+                        hourly: Dict[int, int]) -> None:
     """把一段活动的时长按自然小时切片分摊到 hourly。
 
     跨小时的活动（如 10:50 - 11:10）会按实际落在各小时内的秒数分摊，
     而不是整段记入开始小时，避免「投入最集中的时段」统计偏移。
+
+    同时被 report.aggregate_stats 与 store.hourly_histogram（热力图）复用，
+    故为公开函数。
     """
     if duration <= 0:
         return
@@ -52,6 +55,10 @@ def _distribute_to_hours(start_ts: int, end_ts: int, duration: int,
         slice_end = min(end, hour_end)
         hourly[hour] += slice_end - cursor
         cursor = slice_end
+
+
+# 向后兼容别名（保留旧私有名，避免破坏既有调用）
+_distribute_to_hours = distribute_to_hours
 
 
 def aggregate_stats(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -78,7 +85,7 @@ def aggregate_stats(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         total_duration += dur
         category_durations[e.get("category", "其他")] += dur
         # 跨小时的活动按小时切片分摊，否则整段会记到开始小时，导致「集中时段」偏移
-        _distribute_to_hours(e["started_at"], e["ended_at"], dur, hourly)
+        distribute_to_hours(e["started_at"], e["ended_at"], dur, hourly)
 
     # 最长空档：相邻记录之间的间隔
     max_gap = 0

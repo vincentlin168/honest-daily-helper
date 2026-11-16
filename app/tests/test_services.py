@@ -3,7 +3,6 @@
 覆盖点：上报器配置/头构造/未配置保护；Skill 服务鉴权与路由。
 """
 
-import json
 import sys
 import tempfile
 import threading
@@ -17,7 +16,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from report import build_report
-from skill_server import SkillHandler, SkillServer
+from skill_server import SkillHandler
 from store import RecordStore
 from upload import ReportUploader
 

@@ -30,9 +30,12 @@ class TestGenerateReport(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.helper = _make_helper(self.tmp)
-        now = int(datetime.now().timestamp())
+        # 用「今天中午」而不是「现在 - 1 小时」：
+        # 后者在接近午夜时会落到昨天，导致 generate_report() 取不到记录。
+        noon = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        noon_ts = int(noon.timestamp())
         self.helper.store.insert_entry({
-            "started_at": now - 3600, "ended_at": now,
+            "started_at": noon_ts - 3600, "ended_at": noon_ts,
             "content": "写代码", "category": "代码开发", "model": "deepseek-flash",
         })
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from llm_client import LLMClient, build_system_prompt, DEFAULT_CATEGORIES
+from llm_client import LLMClient, build_system_prompt
 
 
 class TestBuildMessages(unittest.TestCase):
