@@ -212,6 +212,20 @@ class RecordStore:
             ).fetchall()
         return [self._to_dict(r) for r in rows]
 
+    def entries_around(self, ts: int, window: int = 86400) -> List[Dict[str, Any]]:
+        """取某个时间戳前后 window 秒内的记录。
+
+        与 ``entries_by_day`` 的区别：按**时间戳**而非本地日期过滤，
+        因此不依赖运行环境的时区 —— CI（UTC）与本地（UTC+8）结果一致。
+        测试里用它代替硬编码日期，避免时区导致的偶发失败。
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM entries WHERE started_at >= ? AND started_at < ? ORDER BY started_at",
+                (int(ts) - int(window), int(ts) + int(window)),
+            ).fetchall()
+        return [self._to_dict(r) for r in rows]
+
     # ---------- 热力图 ----------
     def hourly_histogram(self, days: int = 7) -> List[Dict[str, Any]]:
         """按「天 × 小时」聚合时长，用于热力图。

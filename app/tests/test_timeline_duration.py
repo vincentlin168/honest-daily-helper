@@ -70,7 +70,7 @@ class TestSummaryTimelineDuration(unittest.TestCase):
         """120 秒内 8 次识别（每 15s）-> 时长应覆盖整个窗口。"""
         buf = [_rec("写代码", f"第{i}次", BASE + i * 15) for i in range(8)]
         self.h.summarize_buffer(buf, summary_at=BASE + 120)
-        rows = self.h.store.entries_by_day("2023-11-15")
+        rows = self.h.store.entries_around(BASE)
         total = sum(r["ended_at"] - r["started_at"] for r in rows)
         self.assertEqual(total, 120, "8 次识别跨越 120s，记录时长也应是 120s")
 
@@ -85,7 +85,7 @@ class TestSummaryTimelineDuration(unittest.TestCase):
         """两次识别之间的间隔应计入时长。"""
         buf = [_rec("写代码", "a", BASE), _rec("写代码", "b", BASE + 90)]
         self.h.summarize_buffer(buf, summary_at=BASE + 120)
-        rows = self.h.store.entries_by_day("2023-11-15")
+        rows = self.h.store.entries_around(BASE)
         total = sum(r["ended_at"] - r["started_at"] for r in rows)
         self.assertEqual(total, 120)
 
@@ -93,7 +93,7 @@ class TestSummaryTimelineDuration(unittest.TestCase):
         """不应该产生时长为 0 的记录。"""
         buf = [_rec("写代码", f"第{i}次", BASE + i * 15) for i in range(8)]
         self.h.summarize_buffer(buf, summary_at=BASE + 120)
-        rows = self.h.store.entries_by_day("2023-11-15")
+        rows = self.h.store.entries_around(BASE)
         for r in rows:
             self.assertGreater(r["ended_at"] - r["started_at"], 0,
                                "记录时长不应为 0 秒")
@@ -155,7 +155,7 @@ class TestRichDescriptionRetention(unittest.TestCase):
             _rec("写代码", "e", BASE + 60),
         ]
         self.h.summarize_buffer(buf, summary_at=BASE + 120)
-        rows = self.h.store.entries_by_day("2023-11-15")
+        rows = self.h.store.entries_around(BASE)
         for i in range(len(rows) - 1):
             self.assertGreaterEqual(
                 rows[i + 1]["started_at"], rows[i]["ended_at"],
@@ -171,7 +171,7 @@ class TestRichDescriptionRetention(unittest.TestCase):
             _rec("写代码", "e", BASE + 60),
         ]
         self.h.summarize_buffer(buf, summary_at=BASE + 120)
-        rows = self.h.store.entries_by_day("2023-11-15")
+        rows = self.h.store.entries_around(BASE)
         total = sum(r["ended_at"] - r["started_at"] for r in rows)
         self.assertEqual(total, 120, "活动切换不应丢失时间")
 

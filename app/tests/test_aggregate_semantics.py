@@ -73,7 +73,7 @@ class TestMergeSemantics(unittest.TestCase):
         base = 1_700_000_000
         for i in range(8):
             apply(self.store, "写代码", f"第{i}次", "代码开发", now=base + i * 15)
-        rows = self.store.entries_by_day("2023-11-15")
+        rows = self.store.entries_around(base)
         self.assertEqual(len(rows), 1)
 
     def test_different_activity_creates_new_segment(self):
